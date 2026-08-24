@@ -163,7 +163,7 @@ than working around it silently):
   launchd/cron entry, a watcher script), like Claude Code scaffolding a cron job;
   the OS runs it, Addison never fires itself. Arming a powerful action
   **requires** a user-typed keyword, a **per-automation nonce** Addison shows and
-  the person retypes ([step-8-automation-plan.md](step-8-automation-plan.md) §3
+  the person retypes ([step-8-automation-plan.md](plans/step-8-automation-plan.md) §3
   owns it). **Built in step 8 phase 3, 2026-08-07**
   (`agent_core/automation_nonce.py`, `tools/arm_automation.py`, and the shell's
   `automation.rs`, which is the only code that writes `~/Library/LaunchAgents` and
@@ -174,7 +174,13 @@ than working around it silently):
   Alongside it: authoring (`create_automation`, phase 2) and the phase-1 fence,
   which closed the generic paths (the OS-automation directories are un-trustable,
   un-writable under the seatbelt, and refused in commands, as is invoking
-  `launchctl`/`crontab`/`at`/`batch`), so the gated path is the ONLY path.
+  `launchctl`/`crontab`/`at`/`batch`/`schtasks`), so the gated path is the ONLY path.
+  **The fence has a Windows half since 2026-08-23** — the Startup folders and the
+  Task Scheduler's own directories, in `policy.WINDOWS_AUTOMATION_DIRS`, un-trustable
+  and refused by the same two predicates. It has no seatbelt half, because there is no
+  profile on Windows to put one in, and the arming side stays macOS-only by owner
+  decision. [`windows-port-plan.md`](plans/windows-port-plan.md) §3 owns both, including what
+  Windows concedes.
   Because the keyword is
   user-typed, observed/injected content can never supply it, so the nonce is also
   a prompt-injection defense. (Scope amendment 2026-07-20; supersedes the earlier
@@ -187,7 +193,7 @@ than working around it silently):
   typed something, and **Addison still never speaks first** — no proactive message,
   no notification, no digest, ever. The loop's target is named in
   `tests/test_g2_no_self_trigger.py`'s reviewed set with that argument;
-  [messaging-channel-plan.md](messaging-channel-plan.md) §3.4 owns it at length.
+  [messaging-channel-plan.md](plans/messaging-channel-plan.md) §3.4 owns it at length.
 - **G3: Guaranteed rollback (the operative meaning of "safety").** Neither the
   user nor the model can drive Addison into an unrecoverable state. App-state
   **snapshots** (automatic before any risky change, plus **on-command**) always
@@ -208,7 +214,7 @@ than working around it silently):
   exact command text, no grant recorded) and it was the **only** layer, and a
   single layer guarded by human attention is not a floor.
 
-  **Closed by [Phase-2 step 5.5](step-5.5-containment-plan.md) items 1–3.**
+  **Closed by [Phase-2 step 5.5](plans/step-5.5-containment-plan.md) items 1–3.**
   `run_command` no longer executes in the Agent Core at all: it crosses the
   ShellBridge like every other OS effect (§1.3), and the shell runs it under a
   **seatbelt profile generated from the live workspace-trust roots**, with the
@@ -223,7 +229,12 @@ than working around it silently):
   platform with no profile, and Addison's own **code** as opposed to its **data**.
   Both are live items in [`KNOWN-GAPS.md`](KNOWN-GAPS.md), which owns them and
   states each in full; design-doc §9.x states them as threat-model boundaries.
-  Neither is written out a third time here.
+  Neither is written out a third time here. **The first of the two stopped being
+  hypothetical on 2026-08-23**: Windows is a target now and has no profile, so a
+  command there runs with `sandboxed: false` and the string layer is the only thing
+  under it — decided that way rather than inherited
+  ([`windows-port-plan.md`](plans/windows-port-plan.md) §2). The second edge was repaired on
+  Windows in the same change, and is not repaired anywhere by it.
 
   This correction followed the one G4 took when "captures the app binary" was
   narrowed to a build reference: **the repo must not carry a floor its own tests
@@ -284,7 +295,7 @@ and rebuilds in the same session.
   `action_snapshots`, `routine_runs`, `device_identity`, `config_snapshots`
   itself, **`tool_grants`**, and (step 5) **`workspace_trust`**: live consent
   state, not config, and restoring it could reinstate a grant the user had revoked,
-  i.e. a privilege grant delivered by a deliberately ungated one-action button. A
+  that is, a privilege grant delivered by a deliberately ungated one-action button. A
   restore additionally clears the live in-session grants. **This inverts the scope
   amendment §8.2's "trust is snapshotted" wording**, which is now annotated there
   as superseded: workspace trust is standing consent that suppresses cards inside
@@ -491,7 +502,7 @@ relaxes exactly these four, and only as spelled out above.
    the one registry, and
    like the routine view its marker is not its enforcement: `refuse_if_not_remote` at
    both dispatch paths is.
-   [messaging-channel-plan.md](messaging-channel-plan.md) §3.6 owns the closed set
+   [messaging-channel-plan.md](plans/messaging-channel-plan.md) §3.6 owns the closed set
    and why it is a list of ids rather than a tier test.
 4. **Widgets are capability-gated, not code, and buildable in every mode (scope
    amendment 2026-07-20).** Widgets can be *built* in all modes; the mode gates
@@ -503,7 +514,7 @@ relaxes exactly these four, and only as spelled out above.
    - the two launchers. `{kind:"routine",routineId,title}` runs a saved routine
      through the *existing* routine.run path (same registry + gate, zero new
      execution surface), and `{kind:"stat",source,title}` reads the fixed
-     whitelist `tokens_month` / `provider_latency` / `connections`;
+     allowlist `tokens_month` / `provider_latency` / `connections`;
    - the three interactive kinds (`{kind:"checklist",items,title}`,
      `{kind:"note",text,title}`, `{kind:"timer",seconds,title}`), rendered by
      *trusted Addison components*, backed by Addison's own storage, invoking **no

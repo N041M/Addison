@@ -90,11 +90,21 @@ the block's look.
   grouped with: `read_web_page` is LOW so it writes no `action_snapshots` row, and
   the tool most exposed to prompt injection now leaves a durable record of which
   hosts it reached (`detail` is the host, never the full URL).
-- **A command runs UNCONFINED on any platform without a profile.** macOS refuses
-  rather than running bare; Linux has no Landlock/bubblewrap path yet, so the
-  command runs and the answer carries `sandboxed: false`, which the tool prints
-  above the output. Never silent, but never protected either, and v1 is macOS, so
-  this is a real gap the day a second platform ships.
+- **A command runs UNCONFINED on any platform without a profile. THE SECOND
+  PLATFORM SHIPPED, 2026-08-23.** macOS refuses rather than running bare; Linux has
+  no Landlock/bubblewrap path, and Windows now has no restricted-token or
+  AppContainer path either, so on both the command runs and the answer carries
+  `sandboxed: false`, which the tool prints above the output. Never silent, but never
+  protected either. This entry used to end *"v1 is macOS, so this is a real gap the
+  day a second platform ships"* — that day is here, and the posture was **chosen**
+  rather than inherited (owner decision, [windows-port-plan.md](plans/windows-port-plan.md)
+  §2): refusing on Windows would be stricter than the platform that already ships
+  without a profile and would remove builds and tests from the Developer harness,
+  which is the harness's purpose. What still stands under it there is the string
+  layer: `policy.kernel_confines_writes()` is False off macOS, so the denylist's
+  CONTAINS direction stays switched on. Closing this properly means a Windows
+  containment design section, and a containment boundary is a floor — it does not get
+  built ahead of its argument.
 - **`sandbox-exec` is formally deprecated by Apple.** It still works and is what
   Claude Code and Codex CLI both rely on. Acceptable; not permanent. **Recorded in
   design-doc §9.x (2026-07-31)**, so it is documented rather than rediscovered;
@@ -143,7 +153,7 @@ the block's look.
   live 2026-08-07** when step 7 phase 3 shipped dispatch: a tool server's
   descriptions, schemas and answers now reach a model's context. **The owner took
   that decision on 2026-08-13 and screening is BUILT**
-  ([untrusted-screening-plan.md](untrusted-screening-plan.md) owns it): a command's
+  ([untrusted-screening-plan.md](plans/untrusted-screening-plan.md) owns it): a command's
   output is external content, so it is screened, and instruction-shaped text
   reaches the model with a note in front of it and a kind in the audit row.
   **This gap is REDUCED, not closed.** Screening is a pattern layer over six
@@ -151,7 +161,7 @@ the block's look.
   nothing about it changes what an approved command may reach: the network grant is
   exactly as wide as it was. The other backstops are unchanged and are still the
   ones doing the work (redaction, caps and a card on every single call), stated at
-  their real strength in [step-7-mcp-plan.md](step-7-mcp-plan.md) §7. **Phase 4
+  their real strength in [step-7-mcp-plan.md](plans/step-7-mcp-plan.md) §7. **Phase 4
   re-read it again the same day** against the wider surface it opened, reached the
   same answer, and added ONE thing: a cleaning pass over a server's answer that
   runs BEFORE the redactor, because a credential with a zero-width space in the
@@ -169,7 +179,7 @@ the block's look.
   protected directories, so `~/Library/LaunchAgents` could be granted as a
   trusted workspace and `write_project_file` could put a plist there behind an
   ordinary card: login-time automation, armed, no keyword gate. Closed by the
-  fence [step-8-automation-plan.md](step-8-automation-plan.md) §5.5 specifies:
+  fence [step-8-automation-plan.md](plans/step-8-automation-plan.md) §5.5 specifies:
   ONE closed list (`policy.OS_AUTOMATION_DIRS`, hand-synced entry-for-entry with
   `exec.rs`'s copy and pinned by a lockstep test that reads both), THREE
   consumers: the trust floor refuses those directories in both directions at
@@ -249,7 +259,7 @@ the block's look.
   step-over walked past every `=`-bearing word, so `label=Nightly batch job` inside
   a `.properties` heredoc was refused too. The adversarial pass over the fixes
   caught it; `env X=1 crontab -` is conceded instead
-  ([step-8-automation-plan.md](step-8-automation-plan.md) has the rest of the
+  ([step-8-automation-plan.md](plans/step-8-automation-plan.md) has the rest of the
   fence's concessions).
 - **Trusted roots reach the shell as data on every call.** `writeRoots` is sent by
   the core, so the profile is only as narrow as that list. The shell re-derives
@@ -265,7 +275,7 @@ the block's look.
   call opened by steps 4 + 5 and is stated once, below; it is not restated here.
 
 **The keychain integration has a plan (2026-07-31), and its first two steps are
-BUILT (2026-08-06):** [docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md).
+BUILT (2026-08-06):** [docs/plans/secrets-and-keychain-plan.md](plans/secrets-and-keychain-plan.md).
 The double-password diagnosis first produced a ground-up encrypted-vault rewrite;
 scrutiny (60 findings) and two spikes then **turned it into a repair-first plan**.
 Steps 1 and 2 landed on 2026-08-06: presence left the keychain for
@@ -399,7 +409,7 @@ questions were resolved during steps 1–3 and went with it):
   OS-run automation in the harness, never ordinary chat: a one-shot command
   already meets a per-invocation card and the seatbelt, and the recurring,
   unconfined, outlives-the-session nature of an armed job is the jump that earns
-  the ceremony. [step-8-automation-plan.md](step-8-automation-plan.md) owns the
+  the ceremony. [step-8-automation-plan.md](plans/step-8-automation-plan.md) owns the
   build order and the surrounding decisions. **Phases 1–3 landed 2026-08-07** (the
   fence, authoring, the gate and arming) **and phase 4 (state honesty) on
   2026-08-08**, so this question is answered AND built.
@@ -412,7 +422,7 @@ questions were resolved during steps 1–3 and went with it):
   no code depends on it: phases 2 and 3 register a server's tools and call them,
   and every one is `open_only`, so the SAFE view has never held one. Promoting a
   tool into SAFE is a later, separate decision.
-  [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the step's phases and its other
+  [step-7-mcp-plan.md](plans/step-7-mcp-plan.md) owns the step's phases and its other
   decisions. **Transport was the second open question and is now answered: HTTP
   only for v1**, which is why nothing in the step launches a program.
 - ~~**Widget capability tiers and vocabulary (blocks step 6).**~~ **CLOSED
@@ -567,7 +577,7 @@ against the tree on 2026-07-26:
 
 - **A tool server that answers in pictures is a tool server Addison cannot use.**
   Phase 4 counts and discloses `image` / `audio` / binary-resource parts and
-  forwards none of them ([step-7-mcp-plan.md](step-7-mcp-plan.md) §4.4, decision 1),
+  forwards none of them ([step-7-mcp-plan.md](plans/step-7-mcp-plan.md) §4.4, decision 1),
   so a server whose whole output is a chart returns *"nothing Addison can pass on"*
   plus a count. That is the deliberate answer and it is the right one for v1.
   Provenance, not capability, is the objection: the machinery to carry an image to a
@@ -584,7 +594,7 @@ against the tree on 2026-07-26:
 
 Two shapes of credential still cross `agent_core/redaction.py` untouched, and both
 are deliberate as far as they go. The redactor is a **backstop, not a boundary**
-(its own header says so and [step-7-mcp-plan.md](step-7-mcp-plan.md) §7 owns the
+(its own header says so and [step-7-mcp-plan.md](plans/step-7-mcp-plan.md) §7 owns the
 strength that may be claimed for it), so these are not bugs against a promise. They
 are here because somebody will meet them, and because anything built on top of
 "the redactor saw it" is built on sand.
@@ -604,7 +614,7 @@ are here because somebody will meet them, and because anything built on top of
   keystroke, so no later control may assume the text it receives has been cleared.
   **What would close it** is not a wider character class. Screening was the answer
   written down here, and screening was built on 2026-08-13
-  ([untrusted-screening-plan.md](untrusted-screening-plan.md)) **without closing
+  ([untrusted-screening-plan.md](plans/untrusted-screening-plan.md)) **without closing
   this gap**, which is worth stating plainly rather than leaving a reader to infer:
   screening looks for writing shaped like an instruction to an assistant, and a
   split credential is not shaped like one. It reduces the surrounding exposure by
@@ -713,9 +723,16 @@ are here because somebody will meet them, and because anything built on top of
   no reuse. On ext4 the freed number is handed straight back, so a file deleted and a
   different one created can carry the identity Addison recorded for the first, which
   would let `another_file_stands_there` accept a file it never wrote, and could join two
-  unrelated chains. **Not reachable on the shipping platform** (macOS only: launchd, the
-  seatbelt, a Tauri macOS build), and the join is `name OR identity`, so a wrong identity
-  match still needs the row's own name to be involved. It surfaced because the Linux CI
+  unrelated chains. **REACHABLE ON THE SECOND PLATFORM, and this entry named its own
+  trigger** — it closed with *"the fix belongs with any decision to support a second
+  platform, not before it"*, and that decision was taken on 2026-08-23
+  ([windows-port-plan.md](plans/windows-port-plan.md)). Windows does not reuse the identity
+  the way ext4 does — `os.stat` there answers a volume serial and an NTFS file index,
+  and the index is not handed straight back on delete — so the entry is not urgent,
+  but "not reachable on the shipping platform" has stopped being true and the
+  `st_ctime`/`st_size` tiebreak it describes is now work rather than a hypothetical.
+  The join is `name OR identity`, so a wrong identity match still needs the row's own
+  name to be involved. It surfaced because the Linux CI
   runner made a test's own fixture stop proving anything; the test now renames a
   replacement over the name instead, which allocates the new inode while the old file is
   alive and cannot collide anywhere. Recorded rather than fixed: the fix is a
@@ -739,7 +756,7 @@ are here because somebody will meet them, and because anything built on top of
   sentence for the case above; `rpc/undo.py::_undo_last_action` replaces every failure with
   *"Couldn't undo the last action. You may need to reverse it yourself."*, as it already
   did for the no-shell refusal. The review surface's Revert shows the real sentence. Redo
-  already surfaces `result.detail`; undo cannot simply copy that, because an undo failure
+  already surfaces `result.detail`; undo cannot copy that directly, because an undo failure
   can also be a bug's exception text and no stack trace may reach a person (CLAUDE.md).
   The fix is a refusal that is typed rather than stringly (a flag on `UndoResult`), which
   is a change to a shared mechanism and is written down here rather than made in passing.~~
@@ -804,7 +821,7 @@ are here because somebody will meet them, and because anything built on top of
   and is the reason this is written down rather than dismissed. **Owner's call.**
 - ~~**The name on the card is resolved a SECOND time, so it can go stale between the
   label and the effect.**~~ **CLOSED 2026-08-08**, in the review surface's read-paths
-  work as this entry scheduled it ([`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md)
+  work as this entry scheduled it ([`phase-3-review-surface-plan.md`](plans/phase-3-review-surface-plan.md)
   Build §1). The label and the boundary now share ONE resolution: the caller resolves
   above its refusal branches and passes that value to `call_permission_detail`, which
   hands it to the tool's new `permission_detail_for_path(resolved_path)`. A path tool
@@ -954,7 +971,7 @@ are here because somebody will meet them, and because anything built on top of
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
 
 **Opened by the Context Budget Manager (built 2026-08-14;
-[context-budget-plan.md](context-budget-plan.md) owns the subject and states its
+[context-budget-plan.md](plans/context-budget-plan.md) owns the subject and states its
 honest limits — two of the three below are now closed):**
 
 - ~~**The boundary marker is ephemeral, so spec §4.8 item 4 is only partly
@@ -981,7 +998,7 @@ honest limits — two of the three below are now closed):**
   what keeps the untouched original transcript reachable.
 
 **Opened by routine sharing (built 2026-08-15;
-[routine-sharing-plan.md](routine-sharing-plan.md) owns the subject and states all
+[routine-sharing-plan.md](plans/routine-sharing-plan.md) owns the subject and states all
 four of these as what remains uncaught):**
 
 These are attacks a shared routine can carry that nothing in the feature catches.
@@ -993,7 +1010,7 @@ what is missing is the WARNING, never the gate.
 - **Injection phrased as ordinary prose is not flagged at import.** Screening is six
   enumerated shapes, and a description written as plain, reasonable text that a model
   will nonetheless act on reaches the model unmarked. Same standing limit as every
-  other screening origin ([untrusted-screening-plan.md](untrusted-screening-plan.md)
+  other screening origin ([untrusted-screening-plan.md](plans/untrusted-screening-plan.md)
   owns it); listed here because a routine description is read by a model on every
   later run, which is a longer-lived exposure than one web page in one turn.
 - **The taint card is one edge, and three shapes of the same attack sit outside
@@ -1105,7 +1122,7 @@ follows. None is scheduled and none blocks anything.
     likeliest to carry both.
 - **Knowledge: retrieval over person-attached files. v2. Its screening
   prerequisite is now met** (screening shipped 2026-08-13,
-  [untrusted-screening-plan.md](untrusted-screening-plan.md)), **with one thing to
+  [untrusted-screening-plan.md](plans/untrusted-screening-plan.md)), **with one thing to
   settle when this is built**: retrieved passages are local file content, and
   decision 5 of that day says local file reads are not screened for now. A
   knowledge base is exactly the case that decision names as the reason to revisit.
@@ -1132,7 +1149,7 @@ follows. None is scheduled and none blocks anything.
   MANUAL half of the auto-routing question above ("Auto-routing depth: v2 or
   now?"), so the two are designed as one thing, with the automatic chooser
   arriving later rather than beside it. **The design now has an owner:**
-  [`model-assignments-plan.md`](model-assignments-plan.md) (2026-08-09, proposed,
+  [`model-assignments-plan.md`](plans/model-assignments-plan.md) (2026-08-09, proposed,
   not scheduled): closed duty set decided structurally, byte-identical behaviour
   when nothing is assigned, and the mid-turn provider boundary stated rather than
   discovered.
@@ -1152,7 +1169,7 @@ follows. None is scheduled and none blocks anything.
   (approving actions from a phone) deferred toward a bespoke phone app, one
   enabled channel in v1, and two pieces of added scope recorded in the plan (the
   menu-bar popup chat, which needs its own design section before build, and the
-  queue-or-decline sleep setting). [`messaging-channel-plan.md`](messaging-channel-plan.md)
+  queue-or-decline sleep setting). [`messaging-channel-plan.md`](plans/messaging-channel-plan.md)
   owns it: outbound-only transport with no
   listener of any kind, Telegram's Bot API first behind a plural adapter protocol,
   pairing as the authorization boundary (the automation-nonce code, shown on the
@@ -1233,3 +1250,52 @@ follows. None is scheduled and none blocks anything.
     off the ids it loaded and leaves the newer remote rows behind. Nothing is lost or
     corrupted, and the honest fix is either a re-read on `channel.remoteTurn` or
     refusing to load a live channel's conversation — neither is built.
+
+**Opened by the Windows port (phase 1 built 2026-08-23;
+[windows-port-plan.md](plans/windows-port-plan.md) owns the subject, the three owner
+decisions and the numbered list of what is owed):**
+
+- **No line of the Windows-only code has ever run on Windows.** `exec.rs`'s `mod
+  plat` — the Job Object that a timeout kills, the `PeekNamedPipe` drain,
+  `CREATE_NO_WINDOW`, `cmd.exe /C` — typechecks for `x86_64-pc-windows-msvc` and
+  passes `clippy -D warnings` for it, and that is the whole of what is known. The
+  local cross-check is a probe, not a gate: it needs `tauri-plugin-updater` commented
+  out (its `ring` dependency cannot build without an MSVC toolchain) and a stub
+  `llvm-rc` on `PATH`, neither of which is in the repository. **The gates are the two
+  new CI jobs, `rust-windows` and `python-windows`, and neither has run.** Treat any
+  claim about Windows behaviour as unverified until the manual pass in the plan's §7
+  is done.
+- **The Python suite does not run on Windows; a named subset does.** Nineteen test
+  files plant symlinks, spawn `/bin/sh`, call `mkfifo` or hard-code `/tmp`.
+  `scripts/gates.sh python-floors` names the files that must hold there — containment,
+  the G2 fence, policy modes — and `ci.yml`'s `python-windows` runs exactly those. The
+  narrowing is deliberate (a permanently red job is a job someone deletes) and it is a
+  program rather than a memory, but it IS a narrowing: everything outside those three
+  files is unchecked on Windows. The work is to port fixtures file by file until
+  `gates_python_floors` can be deleted.
+- **Fifteen Rust tests are `#[cfg(unix)]`, so their guards are unproven on Windows.**
+  Fourteen in `filesystem.rs` and one in `agent_process.rs`. The reason is the FIXTURE
+  and not the floor — `link_chain` and `refuse_shortcut_at_path` are portable and run
+  there; planting a symlink needs Developer Mode or an elevated token, `mkfifo(1)` does
+  not exist, and the pump test needs `/bin/cat` and `sleep 2`. The floor code is the
+  same code; what is missing on Windows is the assertion that it holds. A junction —
+  Windows's reparse point that an unprivileged user CAN create — would be the honest
+  way to plant the fixture, and is not built.
+- **On Windows, an automation draft previews a launchd plist.** `create_automation`
+  authors an inert draft on every platform and `arm_automation` refuses off macOS with
+  a plain sentence, so nothing unsafe follows; what the person sees is Apple XML for
+  something that cannot be armed on their computer. Confusing rather than dangerous,
+  and it closes with Task Scheduler arming rather than before it — the preview is
+  honest about what the draft IS.
+- **`install_root_of` compares path components case-sensitively.** `Path::starts_with`
+  does, even on Windows, where the filesystem does not. Both sides come from the OS
+  itself (`current_exe()` and `%ProgramFiles%`) so they agree in practice, and
+  `refuse_addison_data_dir` canonicalises both paths downstream anyway. Recorded rather
+  than solved because a normaliser invented in `install_root_of` would be a second,
+  quieter answer to a question `refuse_addison_data_dir` already owns.
+- **The Job Object is assigned just after spawn, not before the child runs.** `std`
+  cannot spawn suspended, so a child that starts a grandchild in the first
+  microseconds could in principle escape the job. Standard practice accepts this race;
+  it is named here so it is a known bound rather than an assumption. Nothing on the
+  Unix side is better in this respect — `process_group(0)` has the same shape of gap
+  against a descendant that calls `setsid`, which is why `drain` survives one.

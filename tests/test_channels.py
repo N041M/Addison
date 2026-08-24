@@ -1,4 +1,4 @@
-"""Messaging channels — PHASE 1 (docs/messaging-channel-plan.md §4, phase 1).
+"""Messaging channels — PHASE 1 (docs/plans/messaging-channel-plan.md §4, phase 1).
 
 Phase 1 ships configuration and nothing else: the ``channels`` and
 ``channel_pairings`` tables, the ``channel.list``/``add``/``remove`` RPC, the Rust

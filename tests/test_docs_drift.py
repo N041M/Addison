@@ -35,6 +35,8 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from agent_core.mcp_catalog import MCP_TOOLS_ARE_CALLABLE
 from tests.doc_claims import (
     CLAIMS,
@@ -50,6 +52,66 @@ from tests.doc_claims import (
 from tests.gate_precision import assert_flags, assert_silent
 
 
+#: The bundled plan documents, which are on the author's disk and NOT in the
+#: repository (owner decision 2026-08-24; `.gitignore` carries the rule and
+#: `docs/README.md` carries the reasoning). Every document that ships still links
+#: into it, so on a fresh clone — CI included — those links point at files that are
+#: not there.
+BUNDLED_DOCS = REPO / "docs" / "plans"
+
+#: WHAT THE BUNDLE CONTAINS, RECORDED IN THE REPOSITORY BECAUSE THE BUNDLE IS NOT.
+#: A reader on a fresh clone can see from here exactly which twelve documents their
+#: checkout is missing, and the checks below can tell a reference to one of them from
+#: a reference to a file that genuinely does not exist. It is a closed list, and
+#: `test_the_bundle_list_matches_the_bundle` holds it to the folder on every machine
+#: that HAS the folder — which is the only machine that could notice it drifting.
+BUNDLED_PLANS = (
+    "context-budget-plan.md",
+    "messaging-channel-plan.md",
+    "model-assignments-plan.md",
+    "phase-3-review-surface-plan.md",
+    "routine-sharing-plan.md",
+    "secrets-and-keychain-plan.md",
+    "step-5.5-containment-plan.md",
+    "step-7-mcp-plan.md",
+    "step-8-automation-plan.md",
+    "test-hardening-plan.md",
+    "untrusted-screening-plan.md",
+    "windows-port-plan.md",
+)
+
+
+def _points_into_an_absent_bundle(resolved: Path, bundle: Path) -> bool:
+    """Is ``resolved`` inside ``bundle``, AND is ``bundle`` not on this machine?
+
+    The one allowance `_broken_links` makes, and it is deliberately the narrowest
+    shape that works: **present means checked.** Where the bundle is on disk — the
+    author's machine, and anyone who was handed the folder — a link into it is
+    verified exactly like every other link, so a plan renamed without its referrers
+    still fails. Only its wholesale ABSENCE is forgiven, because that is the state
+    the ignore rule creates and not a mistake anyone made.
+
+    THE COST, STATED WHERE THE ALLOWANCE IS MADE: on a machine without the bundle
+    this check no longer covers those links at all, and the doc-claims scan
+    (`markdown_files`) does not see those twelve documents either. The gate is
+    therefore weaker in CI than on the machine the documents live on, which is an
+    inversion of the usual arrangement and worth remembering before trusting a
+    green run to have read everything.
+
+    Takes the bundle as an ARGUMENT so both of its states are reachable from a test.
+    A module constant would have left the absent arm — the arm that only ever runs
+    somewhere else — permanently unexercised, which is this file's own most-repeated
+    finding.
+    """
+    if bundle.exists():
+        return False
+    try:
+        resolved.resolve().relative_to(bundle.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def _broken_links(text: str, parent: Path) -> list[str]:
     """Relative link targets in ``text`` that do not exist, resolved from ``parent``."""
     broken: list[str] = []
@@ -57,8 +119,12 @@ def _broken_links(text: str, parent: Path) -> list[str]:
         target = match.group(1).split("#")[0]
         if not target or target.startswith(("http://", "https://", "mailto:")):
             continue
-        if not (parent / target).exists():
-            broken.append(target)
+        resolved = parent / target
+        if resolved.exists():
+            continue
+        if _points_into_an_absent_bundle(resolved, BUNDLED_DOCS):
+            continue
+        broken.append(target)
     return broken
 
 
@@ -106,6 +172,51 @@ def test_the_link_check_is_silent_on_links_that_resolve():
             "a mailto: link": "Ask [the owner](mailto:someone@example.com).",
         },
     )
+
+
+def test_the_bundle_list_matches_the_bundle():
+    """`BUNDLED_PLANS` is the repository's only record of what the ignored folder
+    holds, and a record nothing checks is a record that drifts.
+
+    It can only be checked where the folder exists, so this is a skip on a fresh
+    clone — which is fine and is the whole arrangement: the machine that HAS the
+    documents is the machine that can notice one was added or renamed without the
+    list being amended, and it is also the machine where that happens.
+    """
+    if not BUNDLED_DOCS.exists():
+        pytest.skip("the plan bundle is not on this machine; nothing to compare against")
+    on_disk = {path.name for path in BUNDLED_DOCS.glob("*.md")}
+    assert on_disk == set(BUNDLED_PLANS), (
+        "docs/plans/ and BUNDLED_PLANS disagree. Amend the tuple in the same change "
+        "that adds, renames or removes a plan — it is what a clone without the folder "
+        "reads to know what it is missing, and what the link checks use to tell an "
+        "absent plan from a path that resolves to nothing.\n"
+        f"  on disk, not listed: {sorted(on_disk - set(BUNDLED_PLANS))}\n"
+        f"  listed, not on disk: {sorted(set(BUNDLED_PLANS) - on_disk)}"
+    )
+
+
+def test_the_bundle_allowance_forgives_only_a_bundle_that_is_not_there(tmp_path):
+    """Both arms of `_points_into_an_absent_bundle`, driven rather than described.
+
+    The absent arm is the one that only ever runs on someone else's machine, and a
+    rule whose live arm nothing exercises is a rule nobody can trust. So the bundle
+    is a temp directory here and the test creates or does not create it.
+    """
+    bundle = tmp_path / "docs" / "plans"
+    inside = bundle / "some-plan.md"
+    outside = tmp_path / "docs" / "SAFETY.md"
+
+    # Absent: a link into it is forgiven, and ONLY a link into it.
+    assert _points_into_an_absent_bundle(inside, bundle) is True
+    assert _points_into_an_absent_bundle(outside, bundle) is False
+
+    # Present: nothing is forgiven, including a plan that is genuinely missing —
+    # which is what keeps a rename from going unnoticed on the machine that has
+    # the folder.
+    bundle.mkdir(parents=True)
+    assert _points_into_an_absent_bundle(inside, bundle) is False
+    assert _points_into_an_absent_bundle(outside, bundle) is False
 
 
 def _er_entities(doc: str) -> set[str]:
@@ -286,6 +397,19 @@ def _unresolved_paths(text: str, parent: Path) -> list[str]:
         if token.rstrip("/").rsplit("/", 1)[-1].startswith("."):
             continue                                     # `.json` names a format
         if (parent / token).exists() or resolves(token):
+            continue
+        # A reference to the plan bundle, on a machine that does not have it. Same
+        # allowance `_broken_links` makes and for the same reason — see
+        # `_points_into_an_absent_bundle`. Three spellings, because these documents
+        # write a path all three ways: from the repo root, from themselves, and as a
+        # bare filename (`step-7-mcp-plan.md`), which the generous suffix resolution
+        # above accepts whenever the file is actually there.
+        if not BUNDLED_DOCS.exists() and token in BUNDLED_PLANS:
+            continue
+        if any(
+            _points_into_an_absent_bundle(base / token, BUNDLED_DOCS)
+            for base in (REPO, parent)
+        ):
             continue
         broken.append(f"{line_no}: `{raw}`")
     return broken
@@ -1274,7 +1398,7 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "from somebody else's server is refused on the way in."
         ),
         "sharing described as what it moves, with no claim about trust": (
-            "A routine leaves this machine as a whitelist of fields: the version, "
+            "A routine leaves this machine as an allowlist of fields: the version, "
             "the name, the description, the variables and the steps."
         ),
         "the gate sentence, which is a claim about the gate and not about import": (
@@ -1992,7 +2116,15 @@ def _row_problems(claims) -> list[str]:
         if claim.id in ids:
             problems.append(f"{claim.id}: duplicate id")
         ids.add(claim.id)
-        if not (REPO / claim.owner).exists():
+        # A row may be OWNED by a bundled plan, and ten of them are. On a machine
+        # without the bundle that owner is genuinely not there, which is a real cost
+        # of the 2026-08-24 decision rather than a malformed row: the work order tells
+        # the reader to go and check a document their clone does not contain. Recorded
+        # in `docs/README.md` beside the rule; forgiven here so the absence does not
+        # read as a registry defect.
+        if not (REPO / claim.owner).exists() and not _points_into_an_absent_bundle(
+            REPO / claim.owner, BUNDLED_DOCS
+        ):
             problems.append(f"{claim.id}: owner {claim.owner} does not exist")
         if claim.while_false is not None and not claim.false_state:
             problems.append(
@@ -2295,7 +2427,7 @@ def _measurement_problems(text: str, rel: str) -> list[str]:
 
 def test_a_spike_result_is_marked_perishable():
     """A spike is an experiment, and its result expires when the thing it was run
-    against changes. `docs/secrets-and-keychain-plan.md` quoted spike 1's conclusion
+    against changes. `docs/plans/secrets-and-keychain-plan.md` quoted spike 1's conclusion
     as a permanent property for six days after `sign-and-run.sh` had voided it.
 
     Narrow on purpose: only a spike reference whose neighbourhood carries a NUMBER

@@ -3,7 +3,7 @@
 // Addison drafts a widget spec from the conversation (widget.proposeFromConversation)
 // and holds it in the core; nothing is saved until the user presses "Add widget"
 // (widget.confirmSave {accept:true}). A widget is a DECLARATIVE spec — a saved-
-// routine Run pill or a whitelisted stat display — never code. Saving is display-
+// routine Run pill or an allowlisted stat display — never code. Saving is display-
 // only (LOW-risk), so there's no permission card here; a routine widget's routine
 // keeps its own gates when it's actually run.
 

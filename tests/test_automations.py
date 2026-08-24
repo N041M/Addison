@@ -1,4 +1,4 @@
-"""Automations — step 8, PHASE 1 (docs/step-8-automation-plan.md §4.1).
+"""Automations — step 8, PHASE 1 (docs/plans/step-8-automation-plan.md §4.1).
 
 Phase 1 shipped the row and the inert surface: the ``automations`` table, the
 ``automation.list``/``automation.remove`` RPC, the snapshot reason slugs, and

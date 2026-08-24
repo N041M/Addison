@@ -276,7 +276,7 @@ def test_the_registry_holds_exactly_these_tools_and_no_browse_tool():
         "build_registry constructs a different set of tools than this test freezes. If "
         "a tool was genuinely added, add it here deliberately — and if it is a browse, "
         "a listing or a file read, it belongs on the workspace.* RPC instead "
-        "(docs/phase-3-review-surface-plan.md Build §1)."
+        "(docs/plans/phase-3-review-surface-plan.md Build §1)."
     )
 
     expected_ids = {

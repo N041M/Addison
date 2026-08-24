@@ -163,10 +163,27 @@ def _free_disk_bytes() -> int | None:
 
 
 def _total_ram_bytes() -> int | None:
-    """Total physical RAM in bytes (macOS ``sysctl -n hw.memsize``).
+    """Total physical RAM in bytes.
 
     Any failure is a "couldn't check" — return None and let the caller SKIP the
-    RAM gate rather than block setup on an unknowable value (§4.1.2 step 2)."""
+    RAM gate rather than block setup on an unknowable value (§4.1.2 step 2).
+
+    TWO ANSWERS, ONE PER PLATFORM. macOS asks ``sysctl -n hw.memsize``; Windows
+    asks ``GlobalMemoryStatusEx`` through ``ctypes``. **Not a subprocess on
+    Windows**, deliberately: the shells that would answer this are `wmic`, which
+    Microsoft has deprecated and is removing, and PowerShell, which costs a
+    half-second process launch inside a setup step and pops a console window from a
+    GUI process. ``ctypes`` is stdlib, which is this project's first preference
+    anyway, and it cannot fail in a way that matters — every error path here ends
+    at the same "couldn't check".
+
+    LINUX STILL ANSWERS NONE, and that is unchanged rather than overlooked: Linux
+    is not a platform Addison ships on, `sysctl -n hw.memsize` has never worked
+    there, and the RAM gate has therefore always been skipped on CI. Adding a
+    ``/proc/meminfo`` reader would be inventing coverage for a platform nobody
+    runs."""
+    if sys.platform == "win32":
+        return _total_ram_bytes_windows()
     try:
         result = subprocess.run(
             ["sysctl", "-n", "hw.memsize"],
@@ -177,6 +194,44 @@ def _total_ram_bytes() -> int | None:
         )
         return int(result.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _total_ram_bytes_windows() -> int | None:
+    """``GlobalMemoryStatusEx``'s ``ullTotalPhys``, or None.
+
+    Split out so it is nameable — a monkeypatch in a test, and a line in a
+    traceback that says which half answered. The struct is declared here rather
+    than imported because ``ctypes.wintypes`` does not exist off Windows and this
+    module is imported on every platform."""
+    try:
+        import ctypes
+
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+        # `ctypes.windll` exists ONLY on Windows — which is why this whole function
+        # sits behind the platform check — and a type checker running on any other
+        # machine is right to say the attribute is not there. Suppressed at the one
+        # line rather than the module, so the next attribute that genuinely is not
+        # there still fails the gate.
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        if not kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return int(status.ullTotalPhys) or None
+    except (OSError, AttributeError, ValueError):
         return None
 
 
@@ -773,7 +828,7 @@ class JsonRpcServer(
         self._last_run_routine_id: str | None = None
 
         self._queue: queue.Queue = queue.Queue()
-        # Messaging channels phase 2 (docs/messaging-channel-plan.md §3.4). Built
+        # Messaging channels phase 2 (docs/plans/messaging-channel-plan.md §3.4). Built
         # HERE, beside the orchestrator and the registry, because the outer server is
         # what wires everything and this service is a SECOND CALLER OF A TURN —
         # exactly the kind of thing that belongs where the wiring is.
@@ -791,7 +846,7 @@ class JsonRpcServer(
             enqueue_turn=self._queue.put,
             notify=self._notify,
             # The SIXTH origin of screened text, and the first that is not a tool
-            # result (docs/untrusted-screening-plan.md owns the list). Injected
+            # result (docs/plans/untrusted-screening-plan.md owns the list). Injected
             # rather than imported inside the service so a test can prove the door
             # was used.
             screen_text=screen,
@@ -1161,7 +1216,7 @@ class JsonRpcServer(
 
     # In-house premade widgets seeded on first run, so a fresh install's rail isn't
     # empty. These are ordinary DECLARATIVE stat widgets (invariant 4) built ONLY from
-    # existing whitelisted stat sources — no new source, no new execution surface. The
+    # existing allowlisted stat sources — no new source, no new execution surface. The
     # 'widgets_seeded' flag makes it strictly first-run: once set, deleting the seeds
     # never brings them back.
     _DEFAULT_WIDGETS = (
@@ -2670,7 +2725,7 @@ _AUTOMATION_JOBS = {
 # or stops a poll loop, and a thread started from the read loop would be a thread
 # started from the one place that must stay free to deliver frames — including the
 # permission card that would end the turn underneath it.
-# Messaging channels phases 1-2; docs/messaging-channel-plan.md.
+# Messaging channels phases 1-2; docs/plans/messaging-channel-plan.md.
 _CHANNEL_JOBS = {
     Method.CHANNEL_LIST: "channel_list",
     Method.CHANNEL_ADD: "channel_add",

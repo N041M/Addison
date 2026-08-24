@@ -47,7 +47,7 @@ def test_valid_routine_widget_accepts():
     assert validate_widget_spec(spec) is None
 
 
-def test_valid_stat_widget_accepts_each_whitelisted_source():
+def test_valid_stat_widget_accepts_each_allowlisted_source():
     for source in STAT_SOURCES:
         spec = {"kind": "stat", "source": source, "title": "A stat"}
         assert validate_widget_spec(spec) is None, source
@@ -60,7 +60,7 @@ def test_unknown_kind_rejects():
 
 def test_unknown_stat_source_rejects():
     assert validate_widget_spec({"kind": "stat", "source": "disk_space", "title": "x"}) is not None
-    # A code-looking source fails the whitelist equality check.
+    # A code-looking source fails the allowlist equality check.
     assert validate_widget_spec({"kind": "stat", "source": "eval(1)", "title": "x"}) is not None
 
 

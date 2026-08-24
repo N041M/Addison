@@ -67,7 +67,7 @@ export const Method = {
   RoutineDelete: "routine.delete",
 
   // Routine sharing. A routine travels as the PORTABLE format
-  // (agent_core/routines/portable.py), a whitelist of fields, never the stored
+  // (agent_core/routines/portable.py), an allowlist of fields, never the stored
   // row, and the three methods split so that reading a stranger's file can never
   // write anything.
   //
@@ -112,7 +112,7 @@ export const Method = {
   CostPlanApply: "costPlan.apply",
 
   // Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
-  // pill, a whitelisted stat display, or one of the three interactive SAFE kinds
+  // pill, an allowlisted stat display, or one of the three interactive SAFE kinds
   // (checklist / note / timer), NEVER code. Proposed like routines (draft-in-memory
   // + explicit confirm) and saved LOW-risk (display-only).
   // Rows carry the same `unavailable` {reason, message} marker on the same terms
@@ -297,7 +297,7 @@ export const Method = {
   // composer for you to send yourself, with the ordinary permission card.
   ChannelPendingRequests: "channel.pendingRequests",
   ChannelDismissRequest: "channel.dismissRequest",
-  // What happens to a message that arrived while this Mac was asleep. Addison can
+  // What happens to a message that arrived while this computer was asleep. Addison can
   // say it wasn't there (the default), or answer it when it comes back. Choosing to
   // answer is only offered on the Developer surface; choosing to decline works in
   // every profile, because it is the safer of the two.

@@ -40,12 +40,15 @@ from __future__ import annotations
 import ast
 import os
 import re
+import sys
 from pathlib import Path
 
 import agent_core
 from agent_core.policy import (
     DENIED_ARMING,
     OS_AUTOMATION_DIRS,
+    WINDOWS_AUTOMATION_DIRS,
+    _expand_automation_dir,
     command_denied_path,
     workspace_trust_allows,
 )
@@ -105,7 +108,7 @@ _REVIEWED_THREAD_TARGETS = {
     # a tool, or schedules anything.
     "self._run_workspace_pick_directory",
     # channel_service.py — the messaging-channel poll loop (phase 2 of three;
-    # docs/messaging-channel-plan.md §3.4 owns the argument, and this entry is the
+    # docs/plans/messaging-channel-plan.md §3.4 owns the argument, and this entry is the
     # deliberate, reviewable step that plan names).
     #
     # WHAT HANDS IT ITS WORK: a person, with their thumb, on their own phone. The
@@ -300,6 +303,19 @@ def test_g2_the_os_automation_directories_can_never_be_trusted_for_arming() -> N
         expanded = os.path.expanduser(entry)
         assert workspace_trust_allows(expanded) is False, entry
         assert workspace_trust_allows(os.path.join(expanded, "job.plist")) is False, entry
+    # The Windows half of the same fence, refused by the same predicate — a Startup
+    # folder inside a trusted workspace would let `write_project_file` drop a `.cmd`
+    # that Windows runs at every sign-in, which is the identical hole one platform
+    # over. Entries this machine cannot place are skipped and SAID to be skipped:
+    # `test_the_windows_fence_is_whole_on_windows` is what forbids that off-ramp
+    # where it would matter.
+    for entry in WINDOWS_AUTOMATION_DIRS:
+        expanded = _expand_automation_dir(entry)
+        if expanded is None:
+            assert sys.platform != "win32", entry
+            continue
+        assert workspace_trust_allows(expanded) is False, entry
+        assert workspace_trust_allows(os.path.join(expanded, "job.cmd")) is False, entry
     # The parent, which is how the fence would otherwise be walked around.
     assert workspace_trust_allows(os.path.expanduser("~/Library")) is False
     # ...and not vacuous: an unrelated folder is still trustable, so this test
@@ -325,7 +341,11 @@ def test_g2_arming_the_os_clock_from_a_command_is_refused_before_the_gate() -> N
     tool = _Command()
     data_dir = os.path.expanduser("~/.addison")
     for command in ("crontab -", "launchctl load ~/x.plist", "at now", "batch",
-                    "cd /tmp && crontab -"):
+                    "cd /tmp && crontab -",
+                    # Windows's own arming binary, refused on every platform for the
+                    # reason above: this fence must not follow the kernel.
+                    "schtasks /Create /TN x /TR calc.exe /SC daily",
+                    "schtasks"):
         denial = command_denied_path(command, data_dir)
         assert denial is not None and denial[1] == DENIED_ARMING, command
         assert call_is_forbidden(tool, {"command": command}, data_dir) == FORBIDDEN_CALL_ARMING
@@ -354,3 +374,12 @@ def test_g2_the_fence_list_is_in_lockstep_with_the_shell() -> None:
     assert block is not None, "exec.rs no longer declares OS_AUTOMATION_DIRS as a &[&str] literal"
     rust_entries = re.findall(r"\"([^\"]+)\"", block.group("body"))
     assert rust_entries == list(OS_AUTOMATION_DIRS)
+
+    # AND THE WINDOWS TUPLE DELIBERATELY HAS NO SHELL-SIDE HALF. `exec.rs`'s list
+    # feeds the seatbelt profile, which is macOS-only; there is no profile on
+    # Windows to put these in, and copying them there would turn the lockstep
+    # assertion above into a subset check — weakening the one thing that keeps two
+    # languages honest about one fence. Pinned so that "the lists disagree" is read
+    # as the decision it is rather than as drift someone should tidy.
+    for entry in WINDOWS_AUTOMATION_DIRS:
+        assert entry not in rust_entries, entry

@@ -78,7 +78,7 @@ wired up, and auto-update is a **Phase-3** item (see G4 below, where this matter
 > it that way.** Both Phase-3 mentions here (the unwired updater above and
 > previous-binary restore under G4 below) are packaging work and are both still
 > true. What they no longer describe is the *whole* phase.
-> [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) (approved
+> [`phase-3-review-surface-plan.md`](plans/phase-3-review-surface-plan.md) (approved
 > 2026-07-25, prerequisites closed 2026-08-08, **BUILT the same day**) adds a
 > second track to it, a Developer/OPEN **review surface**: a file tree over the
 > trusted roots, a read-only viewer, a real diff of every edit Addison has made that
@@ -434,7 +434,7 @@ Component by component:
   policy mode, never eval'd. Today's vocabulary is a **closed set of six kinds**,
   five of them SAFE: the launchers
   `{kind:"routine", routineId, title}` and `{kind:"stat", source, title}` (source from
-  the fixed whitelist `tokens_month` / `provider_latency` / `connections`) in both
+  the fixed allowlist `tokens_month` / `provider_latency` / `connections`) in both
   modes; the three interactive kinds described below; and `{kind:"command", command,
   title}` in OPEN only: rejected at save under SAFE, and rendered while Simple is
   active as a disabled row (title + reason, no Run and no command text) rather than a
@@ -477,7 +477,7 @@ Component by component:
   admit is deferred rather than answered. Underneath that, invariant 2 keeps a
   mutating MCP tool with no `undo()` out of the SAFE view automatically, whatever a
   server claims. **Transport is HTTP only for v1**, so a saved server is a URL and
-  never a program to launch ([step-7-mcp-plan.md](step-7-mcp-plan.md) owns both
+  never a program to launch ([step-7-mcp-plan.md](plans/step-7-mcp-plan.md) owns both
   decisions, and the three phase-2 scoping decisions). Connecting an MCP server is
   reversible, snapshotted provider-style config, addable by prompting, sharing the
   add-an-endpoint plumbing.
@@ -507,7 +507,7 @@ Component by component:
   BOTH dispatch paths, including the two values the vocabulary gained for it,
   `not_callable` and `failed`.
 - **ChannelService** *(messaging channels, phases 1–3, 2026-08-22.
-  [messaging-channel-plan.md](messaging-channel-plan.md) owns the design)*: how a
+  [messaging-channel-plan.md](plans/messaging-channel-plan.md) owns the design)*: how a
   paired phone reaches Addison. `agent_core/channels/` is a **fourth sibling** under
   the module-boundary rule — it holds the transport contract (`adapter.py`) and the
   Telegram adapter (`telegram.py`) and imports none of `tools/`, `providers/` or

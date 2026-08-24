@@ -2,7 +2,7 @@
 //
 // This is the ONE surface in the app where a person hands a command to the
 // operating system to run on its own schedule, when Addison is closed and outside
-// Addison's sandbox. docs/step-8-automation-plan.md §3 says what that makes this
+// Addison's sandbox. docs/plans/step-8-automation-plan.md §3 says what that makes this
 // card: the code's friction exists to make somebody READ the preview they are
 // copying from, and "the preview is the defence" against the one attack a code
 // cannot stop — a person who types it for a job they never understood. So the

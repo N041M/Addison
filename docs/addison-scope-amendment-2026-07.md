@@ -1,4 +1,4 @@
-# Addison: Scope Amendment (2026-07-20)
+# Addison: scope amendment (2026-07-20)
 
 **Status: HISTORICAL RECORD. Retired as an authoritative document 2026-07-27.**
 
@@ -49,7 +49,7 @@ IT person) he had no way back.
 Three lessons drive this amendment:
 
 1. **Safety, for Addison, means guaranteed recovery.** Not "we ask before
-   risky things" (though we do), but "no request, from the user or the model,
+   risky things" (though Addison does), but "no request, from the user or the model,
    can leave Addison in a state you can't get out of." The failure mode to
    design against is *unrecoverability*, and the anti-pattern to never repeat is
    *a rollback that doesn't fire.*
@@ -194,7 +194,7 @@ ability to restore. G3 joins the standing global floors:
 |---|---|---|
 | **G1** | API keys never reach the frontend/webview or SQLite; keychain-only. | Unchanged; reinforced (snapshots exclude keys). |
 | **G2** | No autonomous self-triggering / scheduling by Addison. | Reinterpreted, still a floor (§9). |
-| **G3** | Guaranteed one-action rollback to a last-working state; restore is unbreakable. | **New.** **Scope correction 2026-07-26:** enforced *within* the database (triggers, sidecars, gate-exempt RPC). The OPEN-mode shell can still delete the files (`run_command` has `affected_path = None`, so confinement never governs it). True in SAFE, overclaimed in OPEN until [step 5.5](step-5.5-containment-plan.md) lands. |
+| **G3** | Guaranteed one-action rollback to a last-working state; restore is unbreakable. | **New.** **Scope correction 2026-07-26:** enforced *within* the database (triggers, sidecars, gate-exempt RPC). The OPEN-mode shell can still delete the files (`run_command` has `affected_path = None`, so confinement never governs it). True in SAFE, overclaimed in OPEN until [step 5.5](plans/step-5.5-containment-plan.md) lands. |
 
 ---
 
@@ -247,7 +247,7 @@ billing) and a convenience for the developer (cheap iteration).
 Addison is already partway there: Ollama local models are free, private, and
 keyless, and the Setup Assistant relay gives a keyless first run. The gap is
 users on weak hardware who can't run a capable local model; **legitimate free
-cloud tiers** (e.g. official free tiers of major providers) fill it.
+cloud tiers** (for example, official free tiers of major providers) fill it.
 
 ### 6.1 In-app: legitimate free/local only
 
@@ -271,11 +271,11 @@ cloud tiers** (e.g. official free tiers of major providers) fill it.
   and are **never surfaced, named, or endorsed inside the app.** Addison the
   product does not pick locks for free tokens.
 
-### 6.4 What we deliberately do NOT adopt from OmniRoute
+### 6.4 What Addison deliberately does NOT adopt from OmniRoute
 
 OmniRoute is the project that motivated the free-model idea, but it is a
 maximalist developer gateway, the opposite of Addison's minimal, approachable,
-single-user posture. We take the *principle* (run without a paid frontier key;
+single-user posture. Addison takes the *principle* (run without a paid frontier key;
 graceful cross-model fallback; routing strategies), not the product:
 
 - **268-provider / 500-model aggregation & free-tier farming**: against the
@@ -321,7 +321,7 @@ are user-tunable, and only its prompting guards.
 1. It lives deep, behind extra confirmation (accidents are unlikely).
 2. Turning any guard **off** mints the undeletable anchor (§3.3), a permanent,
    guaranteed way back (recovery is always possible).
-3. The floors are absent from the panel (the most dangerous things simply cannot
+3. The floors are absent from the panel (the most dangerous things cannot
    be switched off).
 
 This is how "let advanced users disable guards" coexists with "no one can brick
@@ -385,7 +385,7 @@ the harness usable. The per-invocation card is not weakened globally; it is
 > Workspace trust is EXCLUDED from snapshots**, on the `tool_grants` precedent
 > already recorded in `snapshots/scope.py`. Trust is **standing consent that
 > suppresses cards**, functionally a grant, not config. Capturing it would mean a
-> restore could **reinstate a trust the user had revoked**, i.e. a privilege grant
+> restore could **reinstate a trust the user had revoked**, that is, a privilege grant
 > delivered by the deliberately ungated one-action restore button. A recovery floor
 > must not be a privilege-escalation vector. So a restore never resurrects a trust
 > row, and the "disclose a re-granted trust after a restore" copy an earlier draft
@@ -457,7 +457,7 @@ the gate apply to widgets in every tier.
 Owner decision (this amendment): **Addison should work with MCP.** The
 distinction that matters: Addison is an MCP **client** (it *consumes* external
 MCP servers/tools), **not** an MCP server or gateway (the OmniRoute-style thing
-we still decline, §6.4).
+Addison still declines, §6.4).
 
 - MCP tools are surfaced through Addison's **existing tool registry and
   permission gate**, never a side channel. Same rules: gated, logged,
@@ -478,7 +478,7 @@ we still decline, §6.4).
   `undo()`-wrapper the client supplies), it has to be a property Addison verifies
   rather than reads. Two of this bullet's three promises, "gated, **logged**,
   undo-aware", also depend on a tool-call audit log that does not exist yet; it is
-  item 4 of [step 5.5](step-5.5-containment-plan.md), which is therefore a
+  item 4 of [step 5.5](plans/step-5.5-containment-plan.md), which is therefore a
   prerequisite for step 7.
 - Connecting an MCP server is **reversible config** (like adding an endpoint,
   §5): snapshotted, addable by prompting, revocable. It shares the
@@ -501,7 +501,7 @@ The resolution keeps G2 as a floor while enabling the use case:
   anything autonomously.** G2 ("no autonomous self-triggering by Addison")
   therefore holds unchanged.
 - **The keyword gate.** Running/arming a powerful or elevated action requires the
-  user to type a **specific keyword prefix** in front of the message (e.g.
+  user to type a **specific keyword prefix** in front of the message (for example,
   `!run …` or an `arm:` prefix; exact syntax TBD, §13). Ordinary chat is
   unaffected.
 - **Why the keyword is also an injection defense.** Because the prefix is
@@ -564,7 +564,7 @@ The exact request that bricked the friend must become the *safest* thing to ask.
 When the user says "make this use less money" / "make the models as cheap as
 possible," Addison **orchestrates**, and **previews**, two reversible changes:
 
-1. **Writes/proposes a guidance skill** (the primitive already shipped), e.g.
+1. **Writes/proposes a guidance skill** (the primitive already shipped), for example,
    "keep answers brief; avoid re-reading large files; don't reach for the most
    expensive model unless the task needs it."
 2. **Optimizes model selection**: switches the default role's model (and/or the
@@ -613,7 +613,7 @@ undeletable-anchor rule**, none of which any mode or guard can switch off.
    two exemptions written into the SQL rather than left to a caller: permanent rows,
    and **the newest TWO verified-working rows**. Retention here is not housekeeping;
    a rule that can prune the last verified rows leaves the one-action restore with no
-   target, i.e. G3 silently off with no error anywhere, which is the friend's failure
+   target, that is, G3 silently off with no error anywhere, which is the friend's failure
    reintroduced by the recovery machinery itself. Two rather than one, and the second
    is load-bearing: the restore walk skips any verified row whose fingerprint matches
    the current config, so with only one exempt row that row could be exactly the one
@@ -775,7 +775,7 @@ can proceed in parallel with 5–8 once 1–2 land.)
 
 **Status 2026-07-26: steps 1–5 are built and merged; 6–8 are not started.** Those
 three are also the prerequisites for the Phase-3 Developer **review surface**
-(`docs/phase-3-review-surface-plan.md`, approved 2026-07-25, not started), which
+(`docs/plans/phase-3-review-surface-plan.md`, approved 2026-07-25, not started), which
 redefines Phase 3 as packaging **and** a review surface: file tree over trusted
 roots, read-only viewer, a diff of Addison's live edits, per-file revert. The three
 §13 questions still genuinely open, Q1 (keyword syntax), Q6 (MCP in SAFE), Q7

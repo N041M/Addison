@@ -33,8 +33,6 @@
 // the threat model rather than left as a surprise.
 
 use std::io::Read;
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 // macOS-only, like every use of it here: `Path::new(SANDBOX_EXEC)` and the
 // profile tests are all behind `#[cfg(target_os = "macos")]`.
@@ -52,6 +50,278 @@ use serde_json::{json, Value};
 use crate::filesystem::canonical_lossy;
 use crate::ipc::{required_str, RpcError};
 
+// =============================================================================
+// THE PLATFORM SEAM — every non-portable primitive this file needs, and nothing
+// else in it gated on the process machinery.
+//
+// One module per family rather than an attribute per item, for `automation.rs`'s
+// reason: there is then exactly ONE boundary to check, and nothing outside it
+// references anything inside. `#[cfg(target_os = "macos")]` still appears above,
+// but only for the seatbelt — which is a macOS FEATURE, not a portability gap.
+//
+// Three primitives, each because `std::process` has no portable answer:
+//
+//   * `SHELL` / `SHELL_FLAG` — the program that takes a command STRING.
+//     `/bin/sh -c` on Unix, `cmd.exe /C` on Windows.
+//   * `Group` — WHAT A TIMEOUT KILLS. `run_with_timeout`'s docstring argues at
+//     length that killing the direct child is not a timeout at all, because the
+//     shell forks. Unix answers with a process group; Windows answers with a Job
+//     Object, which is the stronger of the two — see `Group` there.
+//   * `prepare_pipe` / `read_chunk` — reading a pipe without the possibility of
+//     blocking forever. Unix switches the descriptor to non-blocking. Windows
+//     cannot (an anonymous pipe has no such mode), so it asks `PeekNamedPipe` how
+//     much is there before committing to a read and reports `WouldBlock` when the
+//     answer is none. `drain` is shared and unchanged: both sides make
+//     `read_chunk` behave identically.
+//
+// NO PART OF THE WINDOWS HALF HAS RUN ON WINDOWS. It typechecks for the target and
+// is written from the documented contracts, which is not the same thing and must
+// not be reported as if it were. `docs/plans/windows-port-plan.md` owns the manual pass
+// that is owed and `docs/KNOWN-GAPS.md` carries the claim until it happens.
+// =============================================================================
+
+#[cfg(unix)]
+mod plat {
+    use std::io::Read;
+    use std::os::unix::io::{AsRawFd, RawFd};
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command};
+
+    /// The program that takes a command string, and the flag that introduces it.
+    pub const SHELL: &str = "/bin/sh";
+    pub const SHELL_FLAG: &str = "-c";
+
+    /// A pipe this file can ask about before reading. Blanket-implemented, so the
+    /// bound on `drain` reads as "a real pipe" and costs its callers nothing.
+    pub trait RawPipe: AsRawFd {}
+    impl<T: AsRawFd> RawPipe for T {}
+
+    /// Make the child a group leader, so `Group::kill` reaches every descendant it
+    /// forks. Without this the kill lands on the shell and the real work runs on —
+    /// see `run_with_timeout`, "THE PROCESS GROUP IS THE WHOLE TIMEOUT".
+    pub fn prepare_child(command: &mut Command) {
+        command.process_group(0);
+    }
+
+    /// What a timeout kills: the child's process group.
+    pub struct Group(u32);
+
+    impl Group {
+        /// Captured from the live child, before it is moved onto the wait thread.
+        pub fn capture(child: &Child) -> Self {
+            Group(child.id())
+        }
+
+        /// SIGKILL the whole GROUP (negative pid), which is what actually stops the
+        /// work AND closes the pipes the drain threads are reading.
+        ///
+        /// SIGKILL rather than SIGTERM: the command is already past its budget, and
+        /// a catchable signal is one a runaway shell can ignore.
+        pub fn kill(&self) {
+            unsafe {
+                libc::kill(-(self.0 as i32), libc::SIGKILL);
+            }
+        }
+    }
+
+    /// Put the descriptor into non-blocking mode, best effort. Without it the read
+    /// in `drain` blocks and no deadline in this file can fire. A failing `fcntl` is
+    /// not fatal — the drain degrades to the old blocking behaviour rather than
+    /// losing output — but it does not happen on a pipe this process just created.
+    pub fn prepare_pipe<R: RawPipe>(pipe: &R) {
+        set_nonblocking(pipe.as_raw_fd());
+    }
+
+    /// One read. The descriptor is already non-blocking, so the kernel supplies the
+    /// `WouldBlock` the drain loop is written against.
+    pub fn read_chunk<R: Read + RawPipe>(pipe: &mut R, buffer: &mut [u8]) -> std::io::Result<usize> {
+        pipe.read(buffer)
+    }
+
+    /// The argv, applied the ordinary way. `execve` takes a vector of strings and
+    /// no shell re-parses them, so there is nothing to be careful about here — the
+    /// care is all on the other side of the seam.
+    pub fn apply_args(command: &mut Command, args: &[String]) {
+        command.args(args);
+    }
+
+    fn set_nonblocking(fd: RawFd) {
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+mod plat {
+    use std::io::Read;
+    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Child, Command};
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject, TerminateJobObject,
+        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    /// `cmd.exe /C <string>` is the direct analogue of `/bin/sh -c <string>`: one
+    /// program that takes a command LINE. PowerShell would be the other candidate
+    /// and is deliberately not it — its argument quoting differs from what every
+    /// model writes, and a shell that reinterprets the string is a shell whose
+    /// effect nobody can predict from reading the card.
+    pub const SHELL: &str = "cmd.exe";
+    pub const SHELL_FLAG: &str = "/C";
+
+    pub trait RawPipe: AsRawHandle {}
+    impl<T: AsRawHandle> RawPipe for T {}
+
+    /// `CREATE_NO_WINDOW`, and that is a user-facing requirement rather than
+    /// tidiness: Addison is a GUI process, so a bare `cmd.exe` child pops a console
+    /// window onto the person's screen for the length of every command. The Job
+    /// Object does the grouping here, so unlike Unix there is nothing else to set.
+    pub fn prepare_child(command: &mut Command) {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    /// What a timeout kills: a Job Object holding the child and everything it
+    /// starts.
+    ///
+    /// STRONGER THAN THE UNIX SIDE, in the one way that matters. A descendant can
+    /// leave a process group by calling `setsid`, which is the escaped-descendant
+    /// hole `drain` exists to survive; a process cannot leave a job unless it was
+    /// created with breakaway rights the job itself has to grant. So on Windows the
+    /// timeout is total.
+    ///
+    /// AND THE JOB OUTLIVES THE TIMEOUT PATH ON PURPOSE. `JOB_OBJECT_LIMIT_KILL_ON_
+    /// JOB_CLOSE` means that when this value drops — at the END of the call, after
+    /// both drains have finished — anything the command left running is killed too.
+    /// That is a DELIBERATE DIVERGENCE from Unix, where a backgrounded job survives
+    /// the call: it closes the orphan-holding-the-pipe case completely rather than
+    /// mitigating it, at the cost that `start /b <server>` does not outlive its
+    /// command. Recorded in docs/plans/windows-port-plan.md rather than left to be
+    /// discovered.
+    ///
+    /// A `None` job is honest degradation: every step here can fail, and a failed
+    /// step must not leave a half-configured job pretending to be containment. The
+    /// caller still gets its deadline — the wait returns, the answer says the
+    /// command was stopped — it simply has no way to reach the descendants.
+    pub struct Group(Option<HANDLE>);
+
+    impl Group {
+        pub fn capture(child: &Child) -> Self {
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return Group(None);
+                }
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let sized = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+                let configured = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    std::ptr::addr_of!(limits).cast(),
+                    sized,
+                );
+                if configured == 0 {
+                    CloseHandle(job);
+                    return Group(None);
+                }
+                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                    CloseHandle(job);
+                    return Group(None);
+                }
+                Group(Some(job))
+            }
+        }
+
+        pub fn kill(&self) {
+            if let Some(job) = self.0 {
+                unsafe {
+                    TerminateJobObject(job, 1);
+                }
+            }
+        }
+    }
+
+    impl Drop for Group {
+        fn drop(&mut self) {
+            if let Some(job) = self.0 {
+                unsafe {
+                    CloseHandle(job);
+                }
+            }
+        }
+    }
+
+    /// Nothing to do: an anonymous pipe has no non-blocking mode on Windows, which
+    /// is why `read_chunk` asks before it reads instead.
+    pub fn prepare_pipe<R: RawPipe>(_pipe: &R) {}
+
+    /// One read that cannot block, built out of a peek.
+    ///
+    /// `PeekNamedPipe` reports how many bytes are buffered without consuming any, so
+    /// a positive answer makes the following `read` return immediately. Zero
+    /// available is reported as `WouldBlock`, which is exactly the state the drain
+    /// loop is written against.
+    ///
+    /// A FAILED PEEK IS EOF, not an error to retry. On an anonymous pipe the
+    /// realistic failure is `ERROR_BROKEN_PIPE` — every writer has closed its end —
+    /// and answering `Ok(0)` puts the loop on its EOF arm. Treating it as a
+    /// transient error would spin the drain until its own grace period expired,
+    /// which is the same answer three hundred milliseconds later.
+    /// The argv, appended VERBATIM. **This is a correctness fix, not a style
+    /// choice, and getting it wrong is silent.**
+    ///
+    /// `Command::args` quotes each argument by the MSVCRT rules — wrap anything
+    /// containing a space in `"`, escape an inner `"` as `\"`. `cmd.exe` does not
+    /// parse those rules: it treats `\` as a literal backslash and every `"` as a
+    /// quote toggle. So `git commit -m "a message"` would arrive at cmd as
+    /// `git commit -m \"a` … and run as something nobody typed, on a command the
+    /// person had already read and approved on a card. Quotes are ordinary in shell
+    /// commands, so this is the common case rather than an edge.
+    ///
+    /// `raw_arg` appends the string exactly, separated by a space, which is what
+    /// makes `cmd.exe /C <line>` mean what it means when a person types it. Safe
+    /// here precisely BECAUSE the string is meant to be shell syntax: `&`, `|` and
+    /// `>` doing what they do is the tool's contract on every platform, and this
+    /// file builds exactly one Windows invocation — the two-element argv from
+    /// `sandbox_invocation`. Anything else added later must ask this question again.
+    pub fn apply_args(command: &mut Command, args: &[String]) {
+        for arg in args {
+            command.raw_arg(arg);
+        }
+    }
+
+    pub fn read_chunk<R: Read + RawPipe>(pipe: &mut R, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let mut available: u32 = 0;
+        let peeked = unsafe {
+            PeekNamedPipe(
+                pipe.as_raw_handle() as HANDLE,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::addr_of_mut!(available),
+                std::ptr::null_mut(),
+            )
+        };
+        if peeked == 0 {
+            return Ok(0);
+        }
+        if available == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock));
+        }
+        pipe.read(buffer)
+    }
+}
+
 /// Where a command starts. HOME, not a trusted root: a command's cwd is a
 /// convenience, never an effect bound (that is what the profile is for), and the
 /// core has always run commands from home.
@@ -65,7 +335,16 @@ use crate::ipc::{required_str, RpcError};
 /// also realigns with the Python side, whose `os.path.expanduser` under an empty
 /// `HOME` yields `/Library/...` rather than a relative path.
 fn home_dir() -> PathBuf {
-    match std::env::var("HOME") {
+    // WINDOWS DOES NOT SET `HOME`. `USERPROFILE` is the variable that holds
+    // `C:\Users\<name>` there, and reading `HOME` on Windows would silently take
+    // the `/` fallback for every command — a cwd of the current drive's root,
+    // which is not where anyone's work is. Only the cwd is affected: the seatbelt's
+    // `~`-joins are macOS-only, so the floor argument above is unchanged.
+    #[cfg(windows)]
+    let raw = std::env::var("USERPROFILE");
+    #[cfg(not(windows))]
+    let raw = std::env::var("HOME");
+    match raw {
         Ok(home) if !home.is_empty() => PathBuf::from(home),
         _ => PathBuf::from("/"),
     }
@@ -242,24 +521,38 @@ fn sandbox_invocation(
         vec![
             "-p".to_string(),
             profile,
-            "/bin/sh".to_string(),
-            "-c".to_string(),
+            // `plat::SHELL` rather than the literal, though on macOS the two are the
+            // same string: one spelling of "the program that takes a command line"
+            // per platform, and the seam is where it lives.
+            plat::SHELL.to_string(),
+            plat::SHELL_FLAG.to_string(),
             command.to_string(),
         ],
         true,
     ))
 }
 
-/// No profile to apply yet — Linux needs its own Landlock/bubblewrap path. The
-/// command runs, and the answer says so; the core prints a note above the output.
+/// No profile to apply yet — Linux needs its own Landlock/bubblewrap path and
+/// Windows its own restricted-token or AppContainer one. The command runs, and the
+/// answer says so; the core prints a note above the output.
+///
+/// THIS IS THE WINDOWS POSTURE, DECIDED RATHER THAN INHERITED (owner decision
+/// 2026-08-23, docs/plans/windows-port-plan.md §2): degrade exactly as Linux already
+/// does, not refuse as macOS does. Refusing would be stricter than the platform
+/// that already ships without a profile, for no stated reason, and it would remove
+/// builds, tests and every real coding task from the Developer profile — the
+/// harness's whole purpose. `sandboxed: false` is not decoration: the core's
+/// `policy.kernel_confines_writes()` is False off macOS, which keeps the
+/// denylist's CONTAINS direction switched on, and `run_command` prints
+/// `_UNSANDBOXED_NOTE` above every such answer.
 #[cfg(not(target_os = "macos"))]
 fn sandbox_invocation(
     command: &str,
     _write_roots: &[PathBuf],
 ) -> Result<(String, Vec<String>, bool), RpcError> {
     Ok((
-        "/bin/sh".to_string(),
-        vec!["-c".to_string(), command.to_string()],
+        plat::SHELL.to_string(),
+        vec![plat::SHELL_FLAG.to_string(), command.to_string()],
         false,
     ))
 }
@@ -328,7 +621,7 @@ fn sandbox_invocation(
 /// inside, or CONTAINS an automation dir is DROPPED, through the very same
 /// predicate the data dirs use, and the write-denies of item 5 are the second layer
 /// rather than the only one. The consequence is recorded in
-/// `docs/step-8-automation-plan.md` §5.5 and is intended: `~/Library` can no longer
+/// `docs/plans/step-8-automation-plan.md` §5.5 and is intended: `~/Library` can no longer
 /// be trusted as a workspace, the same both-directions rule `~` already gets from
 /// the data dir. The core's own fence refuses such a grant at the door as well —
 /// and, exactly as with the data dir, that is precisely why this file must not be
@@ -566,15 +859,24 @@ fn run_with_timeout(
     args: &[String],
     timeout: Duration,
 ) -> Result<CapturedOutput, RpcError> {
-    let mut child = Command::new(program)
-        .args(args)
+    let mut builder = Command::new(program);
+    // Through the seam: how an argv reaches the program is one of the things the
+    // two platforms genuinely disagree about (see `plat::apply_args` on Windows).
+    plat::apply_args(&mut builder, args);
+    builder
         .current_dir(home_dir())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
+        .stderr(Stdio::piped());
+    plat::prepare_child(&mut builder);
+    let mut child = builder
         .spawn()
         .map_err(|_| RpcError::app("Addison couldn't run that command."))?;
+
+    // Captured HERE, while the child is still owned by this frame and before the
+    // wait thread takes it: on Windows the capture assigns the child to a Job
+    // Object, and there is nothing to assign once it has moved.
+    let group = plat::Group::capture(&child);
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -592,7 +894,6 @@ fn run_with_timeout(
 
     let (tx, rx) = mpsc::channel();
     let mut waiter = child;
-    let killer = waiter.id();
     let wait_thread = std::thread::spawn(move || {
         let status = waiter.wait();
         let _ = tx.send(status.map(|s| s.code().unwrap_or(-1)));
@@ -602,17 +903,12 @@ fn run_with_timeout(
     let timed_out = match rx.recv_timeout(timeout) {
         Ok(_) => false,
         Err(_) => {
-            // SIGKILL the whole GROUP (negative pid). The child is a group leader
-            // via process_group(0), so this reaches every descendant it forked —
-            // which is what actually stops the work AND closes the pipes the drain
-            // threads are blocked on. Signalling `killer` alone leaves the
-            // grandchildren running; see this function's docstring.
-            //
-            // SIGKILL rather than SIGTERM: the command is already past its budget,
-            // and a catchable signal is one a runaway shell can ignore.
-            unsafe {
-                libc::kill(-(killer as i32), libc::SIGKILL);
-            }
+            // Kill the whole GROUP, never the direct child alone: the shell forks,
+            // so signalling it leaves the real work running and still holding the
+            // pipes the drain threads are reading. What "group" means is the one
+            // genuinely non-portable part, and it lives in `plat::Group` — a
+            // process group on Unix, a Job Object on Windows.
+            group.kill();
             true
         }
     };
@@ -659,22 +955,20 @@ const DRAIN_POLL: Duration = Duration::from_millis(2);
 /// behaves exactly like a blocking read-to-EOF. After it, an empty-but-open pipe
 /// means a descendant escaped the process group (see `run_with_timeout`), and this
 /// gives up rather than holding the shell's IPC pump for that orphan's lifetime.
-fn drain(pipe: Option<impl Read + AsRawFd>, reaped: &AtomicBool) -> String {
+fn drain(pipe: Option<impl Read + plat::RawPipe>, reaped: &AtomicBool) -> String {
     let mut pipe = match pipe {
         Some(p) => p,
         None => return String::new(),
     };
-    // Without this the read below blocks and no deadline in this function can fire.
-    // A failing fcntl is not fatal — the drain simply degrades to the old blocking
-    // behaviour rather than losing output — but it does not happen on a pipe this
-    // process just created.
-    set_nonblocking(pipe.as_raw_fd());
+    // Whatever it takes on this platform to make the read below unable to block
+    // forever — without it no deadline in this function can fire. See `plat`.
+    plat::prepare_pipe(&pipe);
 
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 8192];
     let mut give_up_at: Option<Instant> = None;
     loop {
-        match pipe.read(&mut chunk) {
+        match plat::read_chunk(&mut pipe, &mut chunk) {
             // EOF: every writer, escaped or not, has closed its end.
             Ok(0) => break,
             Ok(n) => {
@@ -700,16 +994,6 @@ fn drain(pipe: Option<impl Read + AsRawFd>, reaped: &AtomicBool) -> String {
         }
     }
     String::from_utf8_lossy(&buffer).into_owned()
-}
-
-/// Put a descriptor into non-blocking mode, best effort.
-fn set_nonblocking(fd: RawFd) {
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        if flags >= 0 {
-            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-        }
-    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

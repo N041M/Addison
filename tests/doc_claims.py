@@ -263,7 +263,7 @@ IMPORT_GRANTS_NO_PERMISSIONS = True
 # Phase 3's scope (owner decision 2026-07-25). It is TWO tracks, not one: the
 # packaging track it has always been — signing, notarisation, the auto-updater,
 # previous-binary restore, Secure-Enclave identity — AND the Developer review surface
-# (`docs/phase-3-review-surface-plan.md`: a file tree over the trusted roots, a
+# (`docs/plans/phase-3-review-surface-plan.md`: a file tree over the trusted roots, a
 # read-only viewer, a diff of Addison's still-live edits, per-file revert).
 #
 # Registered because this drift is not hypothetical — the repo has already shipped it
@@ -427,7 +427,7 @@ class Claim:
 FROZEN = frozenset(
     {
         "docs/addison-scope-amendment-2026-07.md",
-        "docs/step-5.5-containment-plan.md",
+        "docs/plans/step-5.5-containment-plan.md",
     }
 )
 
@@ -793,7 +793,7 @@ CLAIMS: tuple[Claim, ...] = (
     # -- MCP transport: HTTP only, so a server row is never a command ------
     Claim(
         id="mcp-transport-http-only",
-        owner="docs/step-7-mcp-plan.md",
+        owner="docs/plans/step-7-mcp-plan.md",
         holds=MCP_TRANSPORT_HTTP_ONLY,
         true_state=(
             "MCP transport is HTTP ONLY for v1 (owner decision 2026-08-06). An mcp_servers "
@@ -831,7 +831,7 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "Transport was answered on 2026-08-06: HTTP only, so an mcp_servers row "
                 "stores a URL and there is no launch-command field. Amend the sentence, or "
-                "delete it and link to docs/step-7-mcp-plan.md §5, which owns the decision. "
+                "delete it and link to docs/plans/step-7-mcp-plan.md §5, which owns the decision. "
                 "If stdio has genuinely shipped, flip MCP_TRANSPORT_HTTP_ONLY in "
                 "tests/doc_claims.py in the SAME commit."
             ),
@@ -840,14 +840,14 @@ CLAIMS: tuple[Claim, ...] = (
             pattern=r"HTTP only for v1|no stdio|url, never a command|URL and never a command",
             fix=(
                 "stdio has shipped — this line still says the transport is HTTP only. Amend "
-                "it, or link to docs/step-7-mcp-plan.md §5, which owns the transport decision."
+                "it, or link to docs/plans/step-7-mcp-plan.md §5, which owns the transport decision."
             ),
         ),
         exempt=FROZEN,
     ),
     Claim(
         id="channel-pairings-are-never-restored",
-        owner="docs/messaging-channel-plan.md",
+        owner="docs/plans/messaging-channel-plan.md",
         holds=CHANNEL_PAIRINGS_ARE_NEVER_RESTORED,
         true_state=(
             "`channel_pairings` is EXCLUDED from snapshot capture (snapshots/scope.py): a "
@@ -874,7 +874,7 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "A pairing is an authorization, not configuration: `channel_pairings` is in "
                 "`_EXCLUDED_TABLES` and a restore leaves no phone paired. Amend the "
-                "sentence, or link to docs/messaging-channel-plan.md §3.8, which owns the "
+                "sentence, or link to docs/plans/messaging-channel-plan.md §3.8, which owns the "
                 "decision. If an owner decision genuinely made pairings restorable, flip "
                 "CHANNEL_PAIRINGS_ARE_NEVER_RESTORED in tests/doc_claims.py in the SAME "
                 "commit."
@@ -888,7 +888,7 @@ CLAIMS: tuple[Claim, ...] = (
             ),
             fix=(
                 "Pairings are captured now — this line still says a restore leaves no phone "
-                "paired. Amend it, or link to docs/messaging-channel-plan.md §3.8, which "
+                "paired. Amend it, or link to docs/plans/messaging-channel-plan.md §3.8, which "
                 "owns the capture decision."
             ),
         ),
@@ -896,7 +896,7 @@ CLAIMS: tuple[Claim, ...] = (
     ),
     Claim(
         id="remote-view-is-a-subset-of-the-safe-view",
-        owner="docs/messaging-channel-plan.md",
+        owner="docs/plans/messaging-channel-plan.md",
         holds=THE_REMOTE_VIEW_IS_A_SUBSET_OF_THE_SAFE_VIEW,
         true_state=(
             "`registry.remote_tools(mode)` is an INTERSECTION with `visible_tools(mode)`, "
@@ -924,7 +924,7 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "The remote view is an INTERSECTION with visible_tools(mode) and therefore a "
                 "subset of the SAFE view in every mode. Amend the sentence, or link to "
-                "docs/messaging-channel-plan.md §3.6, which owns the floor. If an owner "
+                "docs/plans/messaging-channel-plan.md §3.6, which owns the floor. If an owner "
                 "decision genuinely widened it, flip "
                 "THE_REMOTE_VIEW_IS_A_SUBSET_OF_THE_SAFE_VIEW in tests/doc_claims.py in the "
                 "SAME commit."
@@ -937,7 +937,7 @@ CLAIMS: tuple[Claim, ...] = (
             ),
             fix=(
                 "The remote view is no longer a subset of the SAFE view — this line still "
-                "says it is. Amend it, or link to docs/messaging-channel-plan.md §3.6, which "
+                "says it is. Amend it, or link to docs/plans/messaging-channel-plan.md §3.6, which "
                 "owns the floor."
             ),
         ),
@@ -1009,7 +1009,7 @@ CLAIMS: tuple[Claim, ...] = (
     # -- MCP admission: dev-only, so SAFE admits nothing ------------------
     Claim(
         id="mcp-is-dev-only-in-v1",
-        owner="docs/step-7-mcp-plan.md",
+        owner="docs/plans/step-7-mcp-plan.md",
         holds=MCP_IS_DEV_ONLY_IN_V1,
         true_state=(
             "MCP is DEV-ONLY for v1 (owner decision 2026-08-06). No MCP tool enters "
@@ -1039,7 +1039,7 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "MCP is dev-only for v1, so SAFE admits NOTHING from a server and the "
                 "constraint was deferred rather than chosen. Amend the sentence, or delete "
-                "it and link to docs/step-7-mcp-plan.md §1, which owns the decision. If "
+                "it and link to docs/plans/step-7-mcp-plan.md §1, which owns the decision. If "
                 "SAFE admission has genuinely shipped, flip MCP_IS_DEV_ONLY_IN_V1 in "
                 "tests/doc_claims.py in the SAME commit."
             ),
@@ -1067,7 +1067,7 @@ CLAIMS: tuple[Claim, ...] = (
             pattern=r"no MCP tool enters the SAFE view|MCP is (?:dev|Developer)-only for v1",
             fix=(
                 "SAFE admission has shipped — this line still says MCP is dev-only. Amend "
-                "it, or link to docs/step-7-mcp-plan.md, which owns the admission rule."
+                "it, or link to docs/plans/step-7-mcp-plan.md, which owns the admission rule."
             ),
         ),
         exempt=FROZEN,
@@ -1075,7 +1075,7 @@ CLAIMS: tuple[Claim, ...] = (
     # -- MCP dispatch: nothing a server offers is callable yet -------------
     Claim(
         id="mcp-tools-are-not-callable",
-        owner="docs/step-7-mcp-plan.md",
+        owner="docs/plans/step-7-mcp-plan.md",
         holds=MCP_TOOLS_ARE_NOT_CALLABLE,
         true_state=(
             "Step 7 phase 2 (2026-08-07) can SEE what a tool server offers and can run "
@@ -1112,7 +1112,7 @@ CLAIMS: tuple[Claim, ...] = (
                 "Phase 2 discovers tools and runs none of them: an mcp: id is kept out of "
                 "visible_tools in every mode and refused at both dispatch paths. Amend the "
                 "sentence to say Addison can SEE what a server offers, or link to "
-                "docs/step-7-mcp-plan.md §4.2, which owns the phase. If phase 3 has "
+                "docs/plans/step-7-mcp-plan.md §4.2, which owns the phase. If phase 3 has "
                 "genuinely shipped, flip MCP_TOOLS_ARE_NOT_CALLABLE in tests/doc_claims.py "
                 "AND mcp_catalog.MCP_TOOLS_ARE_CALLABLE in the SAME commit."
             ),
@@ -1148,7 +1148,7 @@ CLAIMS: tuple[Claim, ...] = (
                 "Phase 3 shipped on 2026-08-07 — this line still says nothing an MCP "
                 "server offers can run. Say that Addison asks before each use (which is "
                 "what protects the person now), or name the phase you are recounting, or "
-                "link to docs/step-7-mcp-plan.md §4.3, which owns dispatch. If dispatch "
+                "link to docs/plans/step-7-mcp-plan.md §4.3, which owns dispatch. If dispatch "
                 "has genuinely been withdrawn, flip MCP_TOOLS_ARE_NOT_CALLABLE in "
                 "tests/doc_claims.py AND mcp_catalog.MCP_TOOLS_ARE_CALLABLE in the SAME "
                 "commit."
@@ -1221,14 +1221,14 @@ CLAIMS: tuple[Claim, ...] = (
     # -- Screening: a backstop, never a boundary ---------------------------
     Claim(
         id="screening-is-a-backstop",
-        owner="docs/untrusted-screening-plan.md",
+        owner="docs/plans/untrusted-screening-plan.md",
         holds=SCREENING_IS_A_BACKSTOP,
         true_state=(
             "Untrusted-content screening is a pattern matcher over six enumerated "
             "shapes: a BACKSTOP, not a boundary. Prose it has no pattern for passes "
             "untouched and unmarked. It is advisory, it reduces exposure and does not "
             "eliminate anything, and the permission gate remains the only authority "
-            "(docs/untrusted-screening-plan.md owns the subject)."
+            "(docs/plans/untrusted-screening-plan.md owns the subject)."
         ),
         # Anchored on screening as the subject of a preventing verb, and on the two
         # nouns an over-claim reaches for (a boundary, a guarantee). Silent on the
@@ -1251,7 +1251,7 @@ CLAIMS: tuple[Claim, ...] = (
                 "instruction shapes somebody enumerated) rather than what it "
                 "prevents, and never write it as a reason to relax a card. "
                 "agent_core/screening.py's docstring owns the rule and states it in "
-                "those words; docs/untrusted-screening-plan.md owns the subject and "
+                "those words; docs/plans/untrusted-screening-plan.md owns the subject and "
                 "the owner decisions of 2026-08-13. The permission gate is the only "
                 "authority: if a document needs the strong sentence, it is a claim "
                 "about the gate and belongs to docs/SAFETY.md."
@@ -1268,7 +1268,7 @@ CLAIMS: tuple[Claim, ...] = (
     # -- Continuation deletes nothing, and no model can ask for it ---------
     Claim(
         id="continuation-deletes-nothing",
-        owner="docs/context-budget-plan.md",
+        owner="docs/plans/context-budget-plan.md",
         holds=CONTINUATION_DELETES_NOTHING,
         true_state=(
             "Long-conversation continuation deletes nothing. The full transcript "
@@ -1276,7 +1276,7 @@ CLAIMS: tuple[Claim, ...] = (
             "and the summary is an ACCESS PATH, not a replacement. It is also "
             "orchestrator machinery and never a registry tool: nothing registers it, "
             "no model can ask for it, and there is no permission card for it "
-            "(spec §4.8 owns the rules; docs/context-budget-plan.md owns what "
+            "(spec §4.8 owns the rules; docs/plans/context-budget-plan.md owns what "
             "shipped)."
         ),
         # Anchored on continuation as the SUBJECT of a removing verb with a
@@ -1333,7 +1333,7 @@ CLAIMS: tuple[Claim, ...] = (
                 "the model can reach the mechanism, that is spec §4.8's first hard "
                 "rule and it is false: it is orchestrator machinery, never a "
                 "registry tool, never model-invokable and never behind a permission "
-                "card. docs/context-budget-plan.md owns what shipped, spec §4.8 "
+                "card. docs/plans/context-budget-plan.md owns what shipped, spec §4.8 "
                 "owns the five hard rules, and docs/KNOWN-GAPS.md owns the limits "
                 "it still has: none of them is a deletion."
             ),
@@ -1366,14 +1366,14 @@ CLAIMS: tuple[Claim, ...] = (
                 "the other direction and it is the most load-bearing sentence in "
                 "the feature: it is what the person is told when a chat is "
                 "continued. State exactly what is removed and what survives, in "
-                "docs/context-budget-plan.md, and point every other file at it."
+                "docs/plans/context-budget-plan.md, and point every other file at it."
             ),
         ),
     ),
     # -- Importing a shared routine grants it nothing ----------------------
     Claim(
         id="import-grants-no-permissions",
-        owner="docs/routine-sharing-plan.md",
+        owner="docs/plans/routine-sharing-plan.md",
         holds=IMPORT_GRANTS_NO_PERMISSIONS,
         true_state=(
             "Importing a shared routine grants it nothing. Nobody verifies, vets or "
@@ -1382,7 +1382,7 @@ CLAIMS: tuple[Claim, ...] = (
             "not checked what it is for, and the taint card is ONE exact edge "
             "(file text appearing verbatim in a network step's arguments, one run) "
             "and never exfiltration coverage "
-            "(docs/routine-sharing-plan.md owns the subject)."
+            "(docs/plans/routine-sharing-plan.md owns the subject)."
         ),
         # Anchored on import/sharing/an imported routine as the SUBJECT of a
         # checking or vouching verb, on the two adjectives an over-claim reaches for
@@ -1415,7 +1415,7 @@ CLAIMS: tuple[Claim, ...] = (
                 "can delete it with a restore point already taken. If you mean the "
                 "taint card, it is exact containment inside ONE run and three "
                 "shapes of the same attack are outside it by design. "
-                "docs/routine-sharing-plan.md owns the subject, its four owner "
+                "docs/plans/routine-sharing-plan.md owns the subject, its four owner "
                 "decisions of 2026-08-15 and the list of what remains uncaught; "
                 "the permission gate is the only authority and belongs to "
                 "docs/SAFETY.md."
@@ -1525,7 +1525,7 @@ CLAIMS: tuple[Claim, ...] = (
     # -- step 8: arming exists, and it needs a typed code -------------------
     Claim(
         id="automation-arming-built",
-        owner="docs/step-8-automation-plan.md",
+        owner="docs/plans/step-8-automation-plan.md",
         holds=AUTOMATION_ARMING_BUILT,
         true_state=(
             "Addison can arm an automation (arm_automation, phase 3, 2026-08-07), "
@@ -1582,7 +1582,7 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "Arming shipped in step 8 phase 3 (arm_automation installs a launchd "
                 "job through the shell, behind a typed per-automation code). Say that "
-                "instead, and link to docs/step-8-automation-plan.md, which owns the "
+                "instead, and link to docs/plans/step-8-automation-plan.md, which owns the "
                 "phase order. If the FACT changed, flip AUTOMATION_ARMING_BUILT in "
                 "tests/doc_claims.py in the SAME commit."
             ),
@@ -1608,7 +1608,7 @@ CLAIMS: tuple[Claim, ...] = (
     # -- Phase 3: packaging AND the Developer review surface ----------------
     Claim(
         id="phase-3-includes-the-review-surface",
-        owner="docs/phase-3-review-surface-plan.md",
+        owner="docs/plans/phase-3-review-surface-plan.md",
         holds=PHASE_3_INCLUDES_THE_REVIEW_SURFACE,
         true_state=(
             "Phase 3 has been TWO tracks since 2026-07-25: packaging / signing / "
@@ -1645,7 +1645,7 @@ CLAIMS: tuple[Claim, ...] = (
                 "Phase 3 stopped being packaging-only on 2026-07-25 — it also carries the "
                 "Developer review surface (file tree, read-only viewer, a diff of "
                 "Addison's still-live edits, per-file revert). Name the second track, or "
-                "link to docs/phase-3-review-surface-plan.md, which owns the "
+                "link to docs/plans/phase-3-review-surface-plan.md, which owns the "
                 "redefinition. If the surface has genuinely been dropped from the phase, "
                 "flip PHASE_3_INCLUDES_THE_REVIEW_SURFACE in tests/doc_claims.py in the "
                 "SAME commit."
@@ -1662,7 +1662,7 @@ CLAIMS: tuple[Claim, ...] = (
             ),
             fix=(
                 "The review surface is no longer part of Phase 3 — this line still puts "
-                "it there. Amend it, or link to docs/phase-3-review-surface-plan.md, "
+                "it there. Amend it, or link to docs/plans/phase-3-review-surface-plan.md, "
                 "which owns what the phase contains."
             ),
         ),

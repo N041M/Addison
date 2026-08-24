@@ -19,8 +19,8 @@ SAFE mode (Simple profile) — five shapes, NEVER code. Two launchers:
       conversation — so a routine widget adds ZERO new execution surface. The
       routine keeps its own permission gates at run time.
 
-  {"kind": "stat",    "source": "<whitelisted-source-id>", "title": "..."}
-      Displays a value from a FIXED whitelist of core-computed sources:
+  {"kind": "stat",    "source": "<allowlisted-source-id>", "title": "..."}
+      Displays a value from a FIXED allowlist of core-computed sources:
       ``tokens_month``, ``provider_latency``, ``connections``. An unknown source
       is rejected at save and hidden at render.
 
@@ -85,7 +85,7 @@ MAX_TIMER_SECONDS = 86_400   # 24h — a kitchen timer's worth, and a sane cap
 # A routine id is a uuid (or another plain slug). This deliberately rejects
 # anything with code-shaped characters — "(", "${", "{", "}", ";", backticks,
 # whitespace, "eval" would all fail — so a spec can never smuggle an expression
-# in through the routineId field. Source is whitelist-checked (equality), which
+# in through the routineId field. Source is allowlist-checked (equality), which
 # rejects code-looking sources the same way.
 _PLAIN_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 

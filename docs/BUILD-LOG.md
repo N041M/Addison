@@ -12,10 +12,96 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
+
+[`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner
+decisions of the day and the numbered list of what is owed. What belongs here is the
+findings.
+
+**THE COUPLING WAS MUCH SMALLER THAN THE PROSE SUGGESTED, AND IT WAS MEASURED
+RATHER THAN ESTIMATED.** Compiled for `x86_64-pc-windows-msvc`, the whole Rust shell
+produced errors in exactly two files: nine in `exec.rs` (unix `io`/`process` imports
+and five `libc` calls) and fourteen more in `filesystem.rs`, every one of them a
+test planting a symlink. `keychain.rs`, `automation.rs`, `ipc.rs` and `main.rs`
+compiled untouched — `keyring`'s `windows-native` feature and `automation.rs`'s
+single gated module had both been written correctly long before anyone tried. The
+lesson is the method: a survey by grep would have produced a longer and less
+accurate list than a survey by compiler, and the compiler was available the whole
+time.
+
+**TWO FLOORS EXISTED ONLY ON THE PLATFORM THEY WERE WRITTEN FOR.** Neither is a bug
+report against the original work; both are the same shape, and it is worth naming.
+
+- **The G2 fence named launchd, cron and systemd, and nothing of Windows.** So on
+  Windows `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` was a folder a
+  person could trust as a workspace and `write_project_file` could then drop a `.cmd`
+  into behind an ordinary permission card. Sign-in-time automation with no keyword
+  gate — the exact hole phase 1 of step 8 exists to close, one platform over.
+- **`data_dirs_with_bundle` read `HOME`, which Windows does not set.** The whole
+  `~/.addison` entry would have vanished from the shell's protected set, so
+  `refuse_addison_data_dir` — the shell's INDEPENDENT refusal, the one whose entire
+  point is not to trust the core's `writeRoots` — would have returned "fine" for every
+  path on the platform. A floor that disappears with the platform, and it disappears
+  silently, which is the property that makes this class expensive.
+
+The general form: **a floor written against one OS's names is a floor that is absent
+on every other OS, and its absence looks exactly like its presence.** Every fence in
+this tree that is a list of paths deserves the same question.
+
+**A TEST FIXTURE CAN BE PLATFORM-DEPENDENT IN A WAY THAT MAKES IT ASSERT NOTHING.**
+`install_root_of`'s first test used `r"C:\Program Files\Addison\Addison.exe"`, which
+is correct Windows spelling and, on the Mac running the suite, a single path
+component: `std::path` only treats `\` as a separator when it is compiled FOR
+Windows, so `parent()` answered `""` and the whole test measured nothing. It failed
+loudly this time only because the assertion was an equality against a `Some`. Written
+with `/` separators — which Windows accepts everywhere — the same fixtures exercise
+the real code path on all three platforms. Both halves are mutation-proven: dropping
+the proper-descendant guard and dropping the root check each kill the named test.
+
+**A COMMENT CAN BE TRUE ONLY BECAUSE NOTHING HAS EVER CHECKED.** `filesystem.rs`'s
+fifo helper carried *"No `#[cfg]` guard, because this test module is ALREADY
+unix-only"* — true in the sense that nothing had compiled it elsewhere, and false the
+moment something did. Fifteen tests now carry `#[cfg(unix)]` with the reason stated
+(the FIXTURE cannot be built off Unix; the floor code is portable and runs there),
+and the helper's comment says which of the two it is. Coverage on Windows is
+genuinely thinner and [`KNOWN-GAPS.md`](KNOWN-GAPS.md) carries it, because a gate that
+silently stops running is this repository's most-repeated failure.
+
+**THE LOCAL CROSS-CHECK IS A PROBE AND NOT A GATE, AND THE DIFFERENCE IS THE POINT.**
+`cargo check --target x86_64-pc-windows-msvc` from a Mac dies in `ring`'s build
+script — a C dependency reached through `tauri-plugin-updater`, declared for Phase 3
+and not yet wired — for want of an MSVC toolchain. Commenting that one line out
+locally and putting a stub `llvm-rc` on `PATH` (`cargo check` never links, so the
+`.res` file's contents do not matter) gets the compiler through all ~10,500 lines,
+and that is how the error list above was obtained and how `clippy -D warnings` was
+made to pass for the target. **It depends on two edits that are not in the
+repository**, which is this project's own definition of a worse-than-red gate. So the
+gate is `rust-windows` in `ci.yml`, running the same `scripts/gates.sh rust` on a
+Windows runner — and, per the standing rule, its first run is part of this change
+rather than a follow-up to it. It has not run yet.
+
+**THE WINDOWS PYTHON JOB IS A NAMED SUBSET, AND THAT IS WRITTEN AS A PROGRAM.** The
+suite does not pass on Windows and has never been asked to; nineteen files plant
+symlinks, spawn `/bin/sh`, call `mkfifo` or hard-code `/tmp`. Running all of it there
+would put a permanently red job in front of every pull request, and a gate nobody can
+make green is a gate somebody deletes. `scripts/gates.sh python-floors` names the
+three files that must hold — and it is a function in the same script CI calls, not a
+sentence in a workflow, for the reason that script's own header gives. Its goal is to
+be deleted into `gates_python`.
+
+**ONE DELIBERATE BEHAVIOURAL DIVERGENCE, recorded rather than discovered.** The
+Windows timeout is a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which is
+stronger than a process group — a descendant cannot leave a job the way `setsid`
+leaves a group — and which therefore also kills anything the command left running when
+the call ends. `start /b <server>` does not outlive its command on Windows where a
+backgrounded job does on Unix. That closes the orphan-holding-the-pipe case outright
+instead of mitigating it, which is why it was taken; the flag is one line if it ever
+becomes the wrong trade.
+
 ## What shipped 08-22 (eighth): three read-only tools for a phone, and a note on the desk for everything else
 
 Phase 3 of the messaging channels, and the last one that ships
-([`messaging-channel-plan.md`](messaging-channel-plan.md) owns the design; phase 4 —
+([`messaging-channel-plan.md`](plans/messaging-channel-plan.md) owns the design; phase 4 —
 approving an action from a phone — stays deferred). The claim: **a phone can ask
 Addison to look something up, and everything else comes back as a plain sentence and
 a note waiting on the desk.**
@@ -89,7 +175,7 @@ a note waiting on the desk.**
 
 ## What shipped 08-22 (seventh): a phone that can hold a conversation, and no tools at all
 
-Phase 2 of the messaging channels ([`messaging-channel-plan.md`](messaging-channel-plan.md)
+Phase 2 of the messaging channels ([`messaging-channel-plan.md`](plans/messaging-channel-plan.md)
 owns the design). The claim, and only this: **a paired phone can hold a conversation
 with Addison, and Addison can use no tools at all while doing it.**
 `REMOTE_TOOL_IDS = frozenset()` — empty, on purpose. An empty floor is not a
@@ -183,7 +269,7 @@ changes nothing else about the shape.
 
 ## What shipped 08-22 (sixth): a phone connection that connects to nothing
 
-Phase 1 of the messaging channels ([`messaging-channel-plan.md`](messaging-channel-plan.md)
+Phase 1 of the messaging channels ([`messaging-channel-plan.md`](plans/messaging-channel-plan.md)
 owns the design and its eleven answered decisions). The whole of it is
 configuration: two tables, three RPC methods, two Rust commands and a Settings
 section. **There is no adapter, no poll loop, no pairing and no network call
@@ -326,7 +412,7 @@ NOT offered** — three silences, each of which fails without a symptom if it go
   which reads as a quote and is not one. Eight tests go red when it is removed.
 - **Membership comes from the row's state, never from the glyphs.** A row still
   arriving (or still resolving out of the scramble) has random characters in its
-  tail, and the marker is simply absent while `pending || revealing`. Marking the
+  tail, and the marker is absent while `pending || revealing`. Marking the
   streaming branch selectable turns one test red; making every row selectable
   turns another.
 - **The selection string is captured when the panel appears, not read back when a
@@ -504,7 +590,7 @@ correction is itself the more valuable half of this entry.
 - **WHAT THE OWNER ACTUALLY SAW was a checkout without the feature.** The
   progressive renderer merged from a WORKTREE; the main checkout — the one
   `tauri dev` serves — was still on the pre-merge commit. Nothing was broken;
-  the code being watched simply wasn't the code that shipped. A pull fixed that
+  the code being watched wasn't the code that shipped. A pull fixed that
   half in one command.
 - **WHAT THE REMOTE SESSION THEN "CONFIRMED" was a fossil.** Every screenshot
   that seemed to prove the merged feature broken live was of the STALE DEBUG
@@ -734,7 +820,7 @@ the docs-first wave, and Build §§1–5: read paths as RPC, the diff and per-fi
 revert, the Code screen and its skin, and the CSP change the plan spent a section on.
 Built by five Opus agents in sequence, each independently reviewed (gates re-run,
 mutations re-applied) before its merge; the plan
-([phase-3-review-surface-plan.md](phase-3-review-surface-plan.md)) owns what each
+([phase-3-review-surface-plan.md](plans/phase-3-review-surface-plan.md)) owns what each
 section is, and its per-section "what shipped" blocks own the decisions. What belongs
 HERE is what the rigor passes found:
 
@@ -1040,7 +1126,7 @@ The step-8 plan (the per-automation-nonce keyword gate; the owner's syntax decis
 was already on record) was written, and its first phase built the same day: the
 `automations` table with its inert `automation.list`/`remove` surface, and the fence
 that makes the gated path the ONLY path before the gated path exists.
-`docs/step-8-automation-plan.md` owns the decisions; what belongs here is what the
+`docs/plans/step-8-automation-plan.md` owns the decisions; what belongs here is what the
 work found and what a future session would otherwise rediscover.
 
 - **WRITING THE PLAN FOUND A LIVE GAP, and grounding is why.** Reading
@@ -1238,7 +1324,7 @@ true, and is not the same as it being amended.
 
 ## What shipped 08-07, step 7 phase 4: what comes back, said rather than filtered
 
-[step-7-mcp-plan.md](step-7-mcp-plan.md) §4.4 owns what landed and the three
+[step-7-mcp-plan.md](plans/step-7-mcp-plan.md) §4.4 owns what landed and the three
 decisions taken with it, and §7 owns the re-read: `mcp_client.compose_result` (the
 one place a cut happens now), `clean_result_text`, `structuredContent` through the
 same redaction seam as the text, one shared budget across the whole result, and the
@@ -1312,7 +1398,7 @@ What building it taught:
 
 ## What shipped 08-07, step 7 phase 3: a stranger's tool runs, once a person says so
 
-[step-7-mcp-plan.md](step-7-mcp-plan.md) §4.3 owns what landed and the four
+[step-7-mcp-plan.md](plans/step-7-mcp-plan.md) §4.3 owns what landed and the four
 decisions taken with it: `mcp_client.call_tool`, the bounded `inputSchema`,
 `McpTool.execute`, the `tool_audit` vocabulary migration, and the surface copy that
 changed from "Addison can't use these" to "Addison asks you before each use."
@@ -1380,7 +1466,7 @@ What building it taught:
 
 ## What shipped 08-07, step 7 phase 2: Addison can see a stranger's tools, and run none of them
 
-[step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order and records what
+[step-7-mcp-plan.md](plans/step-7-mcp-plan.md) owns the phase order and records what
 landed: `agent_core/mcp_client.py` (Streamable HTTP), `agent_core/mcp_catalog.py`
 (admission + the in-memory catalog), `mcp.refresh`, two new registry dimensions,
 and the per-server sections on the Tools surface.
@@ -1397,7 +1483,7 @@ What building it taught:
   that has to survive the flip. **Where two mechanisms produce one observable, a
   test on the observable proves neither.**
 - **"Nothing is callable" had to be a mechanism, not an omission.** The tempting
-  version of this phase is to register the tools and simply not write dispatch. That
+  version of this phase is to register the tools and never write dispatch at all. That
   is an absence, and absences are not testable. So it is two layers with one switch:
   ids are kept out of `visible_tools(mode)` in every mode (that list is what is SENT
   to the model, so an id in it is an invitation), and both dispatch paths refuse one
@@ -1444,7 +1530,7 @@ What building it taught:
 
 ## What shipped 08-06, step 7 phase 1: MCP configuration that does nothing
 
-[step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order and now records what
+[step-7-mcp-plan.md](plans/step-7-mcp-plan.md) owns the phase order and now records what
 landed: the `mcp_servers` table, `mcp.list`/`add`/`remove`, and a Developer-only
 Settings section. **No client, no discovery, no registration, no dispatch**: a
 saved server is inert, which is the entire point of splitting the phase off.
@@ -1490,7 +1576,7 @@ What building it taught:
 ## What shipped 08-06: a rejected key changes something, and a key is normalised where it is stored
 
 Plan §5.2 and §5.3 (half of step 4 in
-[secrets-and-keychain-plan.md](secrets-and-keychain-plan.md));
+[secrets-and-keychain-plan.md](plans/secrets-and-keychain-plan.md));
 the plan owns the design and now records what shipped. §14 **decision 3 is answered:
 IN**. ONE definitive auth failure marks a provider needs-attention.
 
@@ -1557,7 +1643,7 @@ and rides on no wire field.
 
 ## What shipped 08-06: presence left the keychain, and every write heals
 
-Steps 1 and 2 of [secrets-and-keychain-plan.md](secrets-and-keychain-plan.md), which
+Steps 1 and 2 of [secrets-and-keychain-plan.md](plans/secrets-and-keychain-plan.md), which
 owns the design; this entry records what building them taught. Step 1: presence is a
 column (`provider_config.secret_presence`, three-way, `present | absent | unknown`)
 and no polled path asks the OS. Step 2: every credential write in `keychain.rs` is an
@@ -1686,7 +1772,7 @@ What is worth carrying forward from building it:
 ## Measured 07-31: two keychain spikes for the vault redesign
 
 Nothing shipped; two claims of
-[docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md) were
+[docs/plans/secrets-and-keychain-plan.md](plans/secrets-and-keychain-plan.md) were
 **measured** before the design could rest on them (the scrutiny pass flagged
 both as load-bearing and unverified). A ~60-line spike binary
 (`security-framework` 3.x, modern `SecItem*` API) was signed with the
@@ -2501,7 +2587,7 @@ all 11 mutations against it survived**, the reduced-motion guard could be delete
 with the suite still green, and **two G3 tests passed while restoring the wrong
 snapshot.** Same shape as the step-1 finding. Assume it is still true somewhere.
 
-**`ee38dbe` also redefined Phase 3.** `docs/phase-3-review-surface-plan.md` (a
+**`ee38dbe` also redefined Phase 3.** `docs/plans/phase-3-review-surface-plan.md` (a
 Developer/OPEN review surface, approved 2026-07-25, blocked at the time on steps
 6–8, of which 6 has since landed on 2026-08-06 and 7 on 2026-08-07) is now
 part of that phase alongside packaging, signing, notarisation, the updater,

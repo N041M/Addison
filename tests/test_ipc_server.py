@@ -1279,7 +1279,7 @@ def test_stdio_entrypoint_subprocess_smoke(tmp_path):
 
 # ===========================================================================
 # Widgets + stats. Widgets are DECLARATIVE specs (a routine Run pill or a
-# whitelisted stat display) proposed like routines and saved LOW-risk. stats.get
+# allowlisted stat display) proposed like routines and saved LOW-risk. stats.get
 # reports token totals, per-provider latency, and connection status — NEVER keys.
 # ===========================================================================
 def _widget_server(tmp_path, responses=None, ollama_status=200, key_probe=None):
@@ -1449,7 +1449,7 @@ def test_usage_recorded_after_turn_and_stats_get_shape(tmp_path):
 
 # ===========================================================================
 # In-house premade widgets seeded on first run (so a fresh rail isn't empty).
-# Seeds are ordinary whitelisted stat widgets — no new source/execution surface —
+# Seeds are ordinary allowlisted stat widgets — no new source/execution surface —
 # and the 'widgets_seeded' flag makes seeding strictly first-run.
 # ===========================================================================
 def _list_widgets(reader, writer, req_id: int) -> list[dict]:

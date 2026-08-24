@@ -1,6 +1,6 @@
 """Step 5.5 — containment for the OPEN harness.
 
-Plan: docs/step-5.5-containment-plan.md. This file covers the CORE half of items
+Plan: docs/plans/step-5.5-containment-plan.md. This file covers the CORE half of items
 1, 2 and 3. **The boundary itself is tested in Rust** (`shell/src-tauri/src/exec.rs`,
 `mod tests`), because that is the process the boundary lives in — including the
 plan's headline, `an_approved_command_cannot_delete_the_recovery_floor`, which
@@ -30,6 +30,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sys
+
+import pytest
 
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
@@ -39,8 +42,11 @@ from agent_core.policy import (
     kernel_confines_writes,
     DENIED_INSIDE,
     OS_AUTOMATION_DIRS,
+    WINDOWS_AUTOMATION_DIRS,
     PolicyMode,
     _derived_data_dir,
+    _automation_roots,
+    _expand_automation_dir,
     command_arms_automation,
     command_denied_path,
     denylisted_roots,
@@ -571,6 +577,79 @@ def test_the_denylist_covers_every_os_automation_directory():
     }
 
 
+def test_the_denylist_covers_every_windows_automation_directory():
+    """The Windows half of the fence, held to the same two standards as the tuple
+    above: every entry this platform can place is denylisted, and the set is
+    spelled out so a row cannot be deleted behind the iterations.
+
+    WHY IT IS A SECOND TEST RATHER THAN A SECOND LOOP. The entries reachable here
+    depend on the platform — ``%SystemRoot%`` expands on Windows and nowhere else —
+    and folding that condition into the test above would have put a skip inside the
+    one assertion whose whole job is to notice a shorter list."""
+    roots = [os.path.normcase(os.path.realpath(r)) for r in denylisted_roots(DATA_DIR)]
+    placeable = 0
+    for entry in WINDOWS_AUTOMATION_DIRS:
+        expanded = _expand_automation_dir(entry)
+        if expanded is None:
+            # Only legitimate OFF Windows. On Windows an entry that will not expand
+            # is a hole in the fence, and `test_the_windows_fence_is_whole_on_
+            # windows` is the assertion that says so.
+            assert sys.platform != "win32", entry
+            continue
+        placeable += 1
+        assert os.path.normcase(os.path.realpath(expanded)) in roots, entry
+
+    # NOT VACUOUS ANYWHERE. Off Windows exactly one entry is spelled with `~` and
+    # therefore reachable, so this loop always asserts something real; a change that
+    # made every Windows row `%`-prefixed would turn the whole test into a no-op
+    # without this line.
+    assert placeable >= 1
+
+    assert set(WINDOWS_AUTOMATION_DIRS) == {
+        "~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
+        "%ProgramData%/Microsoft/Windows/Start Menu/Programs/StartUp",
+        "%SystemRoot%/System32/Tasks",
+        "%SystemRoot%/Tasks",
+    }
+
+
+def test_a_fence_entry_this_platform_cannot_place_never_reaches_the_roots():
+    """Every expanded fence root is ABSOLUTE, on every platform.
+
+    The other half of `_expand_automation_dir`'s contract, and the half a
+    membership assertion cannot see: a relative entry does not make the fence
+    shorter, it makes it point somewhere else. `%SystemRoot%/Tasks` left unexpanded
+    would be resolved against whatever directory the process is running in, so the
+    fence would refuse a folder named `%SystemRoot%` under the project and refuse
+    the Task Scheduler nowhere at all — coverage that reads real and is not.
+
+    Written as a property rather than a list because it is one: nothing in
+    `denylisted_roots` or `_untrustable_dirs` compares paths in a way a relative
+    entry answers usefully."""
+    roots = _automation_roots()
+    assert roots, "the fence must not be empty on any platform this runs on"
+    for root in roots:
+        assert os.path.isabs(root), root
+
+
+def test_the_windows_fence_is_whole_on_windows():
+    """On Windows, EVERY Windows fence entry must expand to an absolute path.
+
+    This is the assertion `_expand_automation_dir`'s docstring promises. Its `None`
+    return is the correct answer off Windows and a fence hole on it: `%SystemRoot%`
+    and `%ProgramData%` are always set there, so an entry that fails to expand means
+    the environment lied or the spelling drifted, and the result would be a fence
+    that silently covers less than it reads.
+
+    A no-op off Windows, deliberately and visibly — the alternative was folding the
+    condition into the test above and losing the ability to say WHICH standard
+    failed."""
+    if sys.platform != "win32":
+        pytest.skip("the whole-fence claim is about Windows; the drop is correct here")
+    for entry in WINDOWS_AUTOMATION_DIRS:
+        assert _expand_automation_dir(entry) is not None, entry
+
+
 def test_an_automation_root_is_refused_inside_but_never_contains():
     """The asymmetry, pinned in both directions, because it is the one part of this
     fence that had to be reasoned about rather than copied.
@@ -884,7 +963,7 @@ def test_a_routine_variable_cannot_smuggle_a_forbidden_path(tmp_path):
 def test_only_the_owner_modules_may_derive_the_data_directory():
     root = pathlib.Path(__file__).resolve().parent.parent / "agent_core"
     # MATCHED ON THE PATH FROM ``agent_core/``, NOT ON ``path.name``. A basename
-    # whitelist reads as if it names three modules; it actually exempts every file
+    # allowlist reads as if it names three modules; it actually exempts every file
     # in the tree that happens to share a basename — and `base.py` alone is
     # `tools/base.py`, `rpc/base.py` and `providers/base.py`. Two of those three
     # were silently allowed to re-derive the data dir by a guard whose entire job

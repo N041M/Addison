@@ -14,9 +14,14 @@ exactly one owner** — a second mention anywhere is a link, never a copy.
 | The standard, conventions, environment | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) |
 | What each step shipped + its rigor findings | [`docs/BUILD-LOG.md`](docs/BUILD-LOG.md) |
 | Gates and verification | `docs/VERIFICATION.md` |
+| The Windows port — what changed, what is owed | [`docs/plans/windows-port-plan.md`](docs/plans/windows-port-plan.md) |
 
 **[`docs/README.md`](docs/README.md) is the full map** — every file, what it owns,
-and the rule that keeps it that way. Load-bearing facts are registered in
+and the rule that keeps it that way. **The twelve `*-plan.md` documents live in
+`docs/plans/`, which is gitignored** (owner decision 2026-08-24), so a fresh clone
+does not have them and several links here point at files it cannot open; the map's
+"Plans" section states what that costs, and `BUNDLED_PLANS` in
+`tests/test_docs_drift.py` lists what is missing. Load-bearing facts are registered in
 [`tests/doc_claims.py`](tests/doc_claims.py) one row each, so a document that
 contradicts one fails the suite with a work order naming the file and line. If a
 run points at something you wrote, fix the document — or, when the *fact* changed,
@@ -218,7 +223,7 @@ The one dependency that is not obvious from the list was inside 7:
   risk never reaches the SAFE view at all. **Transport is HTTP only for v1** —
   stdio would mean the core launching an executable outside the seatbelt, so a
   server row holds a URL and never a command.
-  [`docs/step-7-mcp-plan.md`](docs/step-7-mcp-plan.md) owns the phases and both
+  [`docs/plans/step-7-mcp-plan.md`](docs/plans/step-7-mcp-plan.md) owns the phases and both
   decisions.
 - **8 — the automation keyword gate** + author-OS-run automation. Phases 1–3 of
   four are built (2026-08-07): the fence that makes the gated path the only path,
@@ -234,11 +239,21 @@ The one dependency that is not obvious from the list was inside 7:
   `created_in_mode` stamp — the routines mistake this deliberately did not copy,
   and which is itself closed (2026-08-08). **Step 8 is COMPLETE, and with it the
   Phase-2 sequence.**
-  [`docs/step-8-automation-plan.md`](docs/step-8-automation-plan.md) owns the
+  [`docs/plans/step-8-automation-plan.md`](docs/plans/step-8-automation-plan.md) owns the
   phases and decisions.
 
 When adding a capability, ask which profile and tier surfaces it — do not leak
 developer affordances into Simple.
+
+**Addison is being ported to Windows (phase 1 built 2026-08-23), and nothing in that
+port has run on Windows yet.** [`docs/plans/windows-port-plan.md`](docs/plans/windows-port-plan.md)
+owns it. Two things a builder needs from it before touching anything cross-platform:
+the floors are NOT automatically portable — a fence that is a list of paths is absent
+on every OS it does not name, and its absence looks exactly like its presence (the G2
+fence and the shell's data-dir denies were both in that state until this port) — and
+`run_command` on Windows runs with `sandboxed: false`, exactly as on Linux, by owner
+decision, which means `policy.kernel_confines_writes()` is the question to ask rather
+than the platform.
 
 ## Multi-provider (owner decision 2026-07-18 — overrides spec §10 "Anthropic only")
 
@@ -286,7 +301,7 @@ logic* that picks a strategy per task — v2; the three *named* strategies plus 
 Developer custom chain ship now — see the routing section above, where balanced's cut
 is recorded), Routine step-editing UI, and a Rust rewrite of the
 Agent Core. **Messaging channels left this list on 2026-08-22**: the owner asked for
-phone control, [`docs/messaging-channel-plan.md`](docs/messaging-channel-plan.md)
+phone control, [`docs/plans/messaging-channel-plan.md`](docs/plans/messaging-channel-plan.md)
 was written and its eleven owner decisions answered the same day, and phases 1–3
 are **built** (Telegram default, plural adapters, and the closed remote floor —
 three read-only ids asserted to be a subset of the SAFE view, with everything else
@@ -295,18 +310,18 @@ actions from a phone — stays deferred, the owner's horizon being a bespoke pho
 app). That plan owns the design; ROADMAP owns status. **Neither v2 item from the 2026-07 ecosystem survey is deferred any
 more.** **Untrusted-content screening** was pulled forward on 2026-08-13, its
 triggers having fired, and is **built**;
-[`docs/untrusted-screening-plan.md`](docs/untrusted-screening-plan.md) owns it,
+[`docs/plans/untrusted-screening-plan.md`](docs/plans/untrusted-screening-plan.md) owns it,
 including the honest statement of its strength. **Routine export/import sharing**
 was pulled forward on 2026-08-15 and is **built**, in the narrow form four owner
 decisions of that day settled: any profile may import (a routine needing Developer
 lands listed and switched off), a command step is refused in both directions, the
 picked file's text is screened, and one exact card line rides on a network step
 carrying an earlier file-read's text.
-[`docs/routine-sharing-plan.md`](docs/routine-sharing-plan.md) owns it, including
+[`docs/plans/routine-sharing-plan.md`](docs/plans/routine-sharing-plan.md) owns it, including
 what remains uncaught. The **Context Budget Manager /
 automatic long-conversation continuation** left this list on 2026-08-14: it is
 **built** (spec §4.8), still orchestrator machinery and never a registry tool, and
-[`docs/context-budget-plan.md`](docs/context-budget-plan.md) owns what shipped and
+[`docs/plans/context-budget-plan.md`](docs/plans/context-budget-plan.md) owns what shipped and
 the honest limits it has left (two of the original three were closed 2026-08-22,
 when the thread gained a durable boundary marker and the sidebar started reading
 the lineage).

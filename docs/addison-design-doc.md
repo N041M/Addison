@@ -1,4 +1,4 @@
-# Design Doc: Consumer Agent Harness ("Addison")
+# Design doc: consumer agent harness ("Addison")
 **A local-first, zero-config AI agent harness for non-technical users**
 
 Author: Ronald Karel Grant
@@ -39,7 +39,7 @@ Date: 2026-07-12
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
 OpenClaw-style agent harnesses (OpenClaw, Hermes Agent, OpenHarness, Claude Code) give an LLM hands, memory, and tools, but every one of them assumes a user comfortable with a terminal, config files, and API keys. This doc specifies a harness with the same core capability (chat with an agent that can use tools, remember context, and act) but designed from the ground up for someone who has never opened a terminal.
 
@@ -62,7 +62,7 @@ requires a paid frontier key to be worth using (§7.5).
 
 ---
 
-## 2. Problem Statement
+## 2. Problem statement
 
 Existing harnesses fail non-technical users at four points:
 
@@ -106,7 +106,7 @@ firms the recovery goals into hard guarantees and adds a keyless-usefulness goal
     step 5.5 closing it. Both failures are the same one: a second copy.
 11. **Useful without a paid frontier key.** The companion persona (§5) will not
     set up frontier billing, so Addison must do real work on legitimate free/local
-    models, and let a user add new OpenAI-compatible endpoints by simply asking
+    models, and let a user add new OpenAI-compatible endpoints by asking
     (§7.3, §7.5). Legit sources only, in-app; gray-area routers are documented on
     GitHub, never surfaced or endorsed inside the product.
 
@@ -117,7 +117,7 @@ profile, the default a calm **companion** for Simple, with a third opt-in
 model is no longer merely "unchanged": it is *mode-scoped* and gains the four
 floors of §9, none of which any profile can switch off.
 
-## 4. Non-Goals (v1)
+## 4. Non-goals (v1)
 
 - Enterprise governance/audit trails: different buyer, different doc.
 - Multi-agent orchestration (ClawTeam-style): out of scope until the single-agent product is solid.
@@ -137,7 +137,7 @@ principles that put them there:
   **OS** runs it on its schedule, Addison itself still fires nothing autonomously.
   Arming such a powerful action requires a **user-typed keyword**, a
   per-automation nonce Addison shows and the person retypes (decided 2026-08-07;
-  [step-8-automation-plan.md](step-8-automation-plan.md) §3 owns it), which, because observed content can never type a
+  [step-8-automation-plan.md](plans/step-8-automation-plan.md) §3 owns it), which, because observed content can never type a
   keystroke into your composer, doubles as a structural prompt-injection barrier
   (§9). This is what makes the motivating monitor (background poll + notify)
   buildable while keeping G2 intact.
@@ -160,7 +160,7 @@ an MCP *client* (§7.4).
 
 ---
 
-## 5. Target User & Personas
+## 5. Target user and personas
 
 **Primary persona: "Mira," 54, runs a small accounting practice.**
 Comfortable with Word, Excel, email. Has never used a terminal. Wants help drafting client emails, summarizing PDFs, and looking things up online. Will abandon anything that shows an error code.
@@ -193,7 +193,7 @@ what each audience is *getting* from the same butler on the same unbrickable flo
 
 ---
 
-## 6. High-Level Architecture
+## 6. High-level architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -220,11 +220,11 @@ what each audience is *getting* from the same butler on the same unbrickable flo
 └─────────────────────────────────────────────────────────┘
 ```
 
-Everything left of the dotted trust boundary (chat window, agent core, local memory) runs on-device. The only network calls are: (a) model API calls, (b) explicit tool calls the user has approved (e.g., web search), (c) optional sync/telemetry, opt-in only.
+Everything left of the dotted trust boundary (chat window, agent core, local memory) runs on-device. The only network calls are: (a) model API calls, (b) explicit tool calls the user has approved (for example, web search), (c) optional sync/telemetry, opt-in only.
 
 ---
 
-## 7. Component Design
+## 7. Component design
 
 **Amended 2026-07-20: new components from the butler amendment.** Five additions
 land across the component design; each is detailed where it belongs, but collected
@@ -265,7 +265,7 @@ See §11.)*
 - **Free / no-frontier-required models + add-by-prompt endpoints.** Only
   legitimate free and local models are surfaced in-app; the OpenAI-compatible
   "custom server" provider (§7.3.1) is the extension hook, and a user can add a new
-  endpoint simply by asking Addison ("add this endpoint"), registered as
+  endpoint by asking Addison ("add this endpoint"), registered as
   reversible, snapshotted provider-config data (keys per G1). Gray-area aggregating
   routers are the user's own choice, documented on the project's GitHub only,
   never named, surfaced, or endorsed inside the app.
@@ -289,7 +289,7 @@ See §11.)*
 
 ### 7.1 Desktop Shell
 
-**Choice: Tauri over Electron.** Given you're already building Almanac as a local-first modular app, Tauri fits the same mold: ~10x smaller binary than Electron, a Rust backend you can trust with filesystem/permission logic, and a webview frontend so you reuse React skills from your Team Lead/frontend role. Electron remains the fallback if a required native integration (e.g., a specific OS-level automation library) only ships JS bindings.
+**Choice: Tauri over Electron.** Given you're already building Almanac as a local-first modular app, Tauri fits the same mold: ~10x smaller binary than Electron, a Rust backend you can trust with filesystem/permission logic, and a webview frontend so you reuse React skills from your Team Lead/frontend role. Electron remains the fallback if a required native integration (for example, a specific OS-level automation library) only ships JS bindings.
 
 Frontend: React + TypeScript, Tailwind for styling. Single window, three regions:
 - **Message thread** (chat itself)
@@ -378,7 +378,7 @@ converge on: purple/indigo gradients, glassmorphism, sparkle/bot iconography, sh
 "thinking" effects, dark hero panels, and the centered-bubbles "assistant app" template.
 Aim instead for a calm, distinct, almost non-AI look, closer to a well-made everyday
 desktop utility (a good mail or notes app) than to a chatbot. Addison must also never
-resemble a model vendor's product identity (e.g. warm cream + terracotta reads as
+resemble a model vendor's product identity (for example, warm cream + terracotta reads as
 Anthropic; deep purple as generic AI). Simple is correct: a quiet cool-slate neutral
 palette with one deep steel-blue accent, sharp corners (no rounded cards/buttons), no
 decorative taglines or filler text, real typographic hierarchy tuned for readability
@@ -389,7 +389,7 @@ is profile-independent: Developer mode adds surfaces, never a different skin.
 
 **That last sentence is honored by the Phase-3 code screen, said here so it reads
 as deliberate (noted 2026-08-08).** The Developer review surface
-(`docs/phase-3-review-surface-plan.md`) is the largest Developer-only screen the app
+(`docs/plans/phase-3-review-surface-plan.md`) is the largest Developer-only screen the app
 has planned, and a code viewer is exactly the place a second look normally leaks
 in; every editor arrives with somebody's theme already attached. It does not here.
 The screen is the v4 dark direction throughout (hairline rows, the 2px accent rail
@@ -421,7 +421,7 @@ loop:
 
 Language choice: a Rust core (matches Tauri, gives you a single compiled binary, avoids bundling a Python runtime for end users) that shells out to a minimal set of sandboxed helper processes for specific tools. Given your stronger day-to-day fluency in Python, an alternative is a Python sidecar bundled via PyInstaller, simpler for you to iterate on, at the cost of a larger installer and slower startup. **Recommendation: prototype the agent loop in Python first (fast iteration), port the hot path to Rust once the tool/permission model stabilizes.** This mirrors how you sequenced PyQuest/Sentiment Signal: get correctness first, optimize the shipped artifact second.
 
-### 7.3 Provider Abstraction
+### 7.3 Provider abstraction
 
 Originally scoped as a thin interface kept mostly for future flexibility; now a core piece of the product surface, since model choice (including fully local, offline models) is a stated goal (§3, goal 8).
 
@@ -459,7 +459,7 @@ One settings screen, three tiers, no config file:
 
 #### 7.3.4 Multiple local models, capability gating, and task routing
 
-The "Run locally" tier is not limited to a single model. A user can download and keep several local models at once (a common real-world power-user setup is a larger vision-capable model alongside a smaller, faster text-only one), and pick between them per message from a dropdown under "Local." A Routine (engineering spec §6) can also pin a step to a specific local model by name. This is the direct answer to how people actually run local stacks today (e.g. Ollama with a 14B vision model and an 8B text model side by side).
+The "Run locally" tier is not limited to a single model. A user can download and keep several local models at once (a common real-world power-user setup is a larger vision-capable model alongside a smaller, faster text-only one), and pick between them per message from a dropdown under "Local." A Routine (engineering spec §6) can also pin a step to a specific local model by name. This is the direct answer to how people actually run local stacks today (for example, Ollama with a 14B vision model and an 8B text model side by side).
 
 **Capability gating (v1).** Models differ in what they can take as input: some analyze images, most small local ones can't. Each provider reports its capabilities up front (native tool-calling, context window, and now vision/audio), and Addison uses that to avoid a silent failure: drop an image while a text-only model is active and Addison tells you plainly and offers to switch to a model that can see it, rather than handing the image to a model that will just make something up. Same "name the limit, don't fail silently" principle as the Setup Assistant (§7.5.1).
 
@@ -478,7 +478,7 @@ Keeping it a module rather than a built-in is deliberate:
 
 **Sequencing:** the v1 substrate is per-step pinning to a *specific named model* (so a step can target "the cheap model" or "the strong model" explicitly). The cascade module itself (a shipped draft→refine Routine template) is v2, alongside automatic routing (§7.3.4). Both are optional layers over the same engine.
 
-### 7.4 Tool / Skill System
+### 7.4 Tool / skill system
 
 Every tool declares, up front, in plain language, what it can touch:
 
@@ -499,7 +499,7 @@ Risk tiers drive the consent UI:
 
 This is the direct opposite of OpenClaw's model, which defaults toward broad system access for power users. That's the correct tradeoff for developers; it's a liability for Mira.
 
-#### 7.4.1 V1 Tool Set
+#### 7.4.1 V1 tool set
 
 The general system above is the framework; this is the concrete list for launch. Kept deliberately narrow: every tool here earns its place either by being genuinely core to "help me with everyday stuff" or by being safely undo-able per §7.9. Anything not on this list is a Phase 2+ decision, not an oversight.
 
@@ -509,7 +509,7 @@ The general system above is the framework; this is the concrete list for launch.
 | **Read a dropped-in file** (PDF, docx, image, csv, txt) | Low | N/A (read-only) | Covers "summarize this," "what does this say", the second most common ask |
 | **Read clipboard content** (only when user explicitly pastes) | Low | N/A (read-only) | Lets a user paste an email/message in without saving a file first |
 | **Calculator / unit conversion** | Low | N/A (no external effect) | Common, low-stakes, builds trust early with zero risk |
-| **Save output as a new file** (e.g., "save this as a Word doc on my Desktop") | Medium | Delete the newly created file | High-value, and the undo path is trivial since it only ever creates (never overwrites) a file |
+| **Save output as a new file** (for example, "save this as a Word doc on my Desktop") | Medium | Delete the newly created file | High-value, and the undo path is trivial since it only ever creates (never overwrites) a file |
 | **Draft an email or message** (composes only, opens in the user's own mail/messaging app for them to review and send) | Medium | Discard the draft | Delivers most of the value of "send my email" without ever taking the irreversible step itself; Addison never presses send |
 | **Open a link in the browser** | Low | N/A (no state change in Addison) | Natural follow-on to web search results |
 
@@ -517,7 +517,7 @@ The general system above is the framework; this is the concrete list for launch.
 
 Explicitly **not** in v1, even though they're common asks: sending email/messages directly, deleting or overwriting existing files, editing files in place, calendar writes, any form of system/shell command. Each of these either lacks a clean undo path today or crosses into "high risk" per §7.4; they're Phase 3+ candidates once the rewind system (§7.9) and the trust track record justify widening scope, not launch-blocking gaps.
 
-### 7.5 Credentials & Cost Model
+### 7.5 Credentials and cost model
 
 Four options, not mutually exclusive; pick based on how you want to fund inference cost, now mapped directly onto the three-tier model selector in §7.3.3. Hard constraint carried through this section: **the zero-key path must not cost you anything outright**, and it exists solely to get someone through the first conversation, and it is not intended as a way to do ongoing work. Sustained use is expected to run on the user's own subscription/key, per goal 2 in §3.
 
@@ -528,7 +528,7 @@ Four options, not mutually exclusive; pick based on how you want to fund inferen
 
 **Recommendation for v1:** ship option 3 as the day-one default, with a generous-but-finite message cap on the setup conversation itself as a safety net (setup shouldn't need more than a dozen or so exchanges) rather than that cap being the actual UX; the real end condition is "you're configured," not "you've run out." Once configured, everything hands off to option 1/2 for ongoing use. This satisfies the "no API key on day one" goal without the product ever pretending the free model is meant for real ongoing work, and gives the free model a job it's actually well-suited to (narrow, guided, explanatory) rather than open-ended assistance it may handle unreliably.
 
-#### 7.5.1 Setup Assistant: Engineering Spec
+#### 7.5.1 Setup Assistant: engineering spec
 
 This is the engineering detail for option 3, with the same non-negotiable isolation requirement as before (**nothing here should ever touch your personal Anthropic account or a user's BYOK key**), plus the framing that now shapes every decision below: **the free model's job is to configure Addison, not to be Addison.** That's a narrower, more predictable task than open-ended assistance, and it changes what "done" means.
 
@@ -558,7 +558,7 @@ Its system prompt constrains it to a specific job, distinct from Addison's norma
 
 The real end condition is "the user is configured," not a message count, but a hard ceiling still exists as a backstop, since a conversational agent can't be trusted to always self-terminate correctly:
 
-- A generous cap (e.g., 20-30 messages; genuine setup conversations, including someone asking follow-up questions, shouldn't need more) closes the loop if a setup conversation somehow goes long without resolving. This is a much simpler number to reason about than the earlier "time or message count, whichever first" trial design, because the task itself is naturally short.
+- A generous cap (for example, 20-30 messages; genuine setup conversations, including someone asking follow-up questions, shouldn't need more) closes the loop if a setup conversation somehow goes long without resolving. This is a much simpler number to reason about than the earlier "time or message count, whichever first" trial design, because the task itself is naturally short.
 - If the cap is reached without the user completing setup, the assistant wraps up plainly: "We're at the end of the free setup conversation; want to add your own key now, or keep going with fewer capabilities?" rather than a hard cutoff mid-sentence.
 - No daily reset: this is a one-time, per-install flow. Once setup is complete (or explicitly declined), the Setup Assistant's job is done; it doesn't resurface as a recurring free-chat allowance.
 
@@ -655,13 +655,13 @@ CREATE TABLE tool_grants (
 );
 ```
 
-**Long conversations (built 2026-08-14, engineering-spec §4.8; [`context-budget-plan.md`](context-budget-plan.md) owns what shipped and its limits).** A third concern sits between the two tiers: what happens when one conversation grows past what a model can affordably re-read every turn. The answer is a quiet continuation: Addison condenses the older part of the chat into a summary, carries the confirmed memory facts and the recent turns forward, and says so in one plain sentence in the thread ("I've condensed the earlier part of our chat; nothing was deleted"). It is never silent (no hidden decisions, §9), never writes long-term memory without confirmation, and never deletes the original transcript; the full history stays on disk and remains searchable. The storage substrate shipped first, in step 6, and the automatic behaviour was built on top of it once the real chat UI existed. The boundary marker is the part that is only partly there: the sentence is said once and not saved, which the plan states as its first honest limit.
+**Long conversations (built 2026-08-14, engineering-spec §4.8; [`context-budget-plan.md`](plans/context-budget-plan.md) owns what shipped and its limits).** A third concern sits between the two tiers: what happens when one conversation grows past what a model can affordably re-read every turn. The answer is a quiet continuation: Addison condenses the older part of the chat into a summary, carries the confirmed memory facts and the recent turns forward, and says so in one plain sentence in the thread ("I've condensed the earlier part of our chat; nothing was deleted"). It is never silent (no hidden decisions, §9), never writes long-term memory without confirmation, and never deletes the original transcript; the full history stays on disk and remains searchable. The storage substrate shipped first, in step 6, and the automatic behaviour was built on top of it once the real chat UI existed. The boundary marker is the part that is only partly there: the sentence is said once and not saved, which the plan states as its first honest limit.
 
 ### 7.7 Updates
 
 Tauri's built-in updater (signed release manifests): silent background download, prompt to restart. No manual "check GitHub for a new release" step, which is where most self-hosted tools lose non-technical users after week one.
 
-### 7.8 Setup: Deep Dive
+### 7.8 Setup: deep dive
 
 "Easier to set up" is a first-class requirement, not a side effect of good packaging, so it gets its own spec rather than living implicitly inside §8.
 
@@ -673,7 +673,7 @@ Tauri's built-in updater (signed release manifests): silent background download,
 - **Works if the user does nothing else.** Every step beyond "download, open" is optional. The zero-key managed tier (§7.5, option 3) is what makes this true end-to-end: if setup is seamless but step 2 is "now go get an API key," the seam just moved.
 - **Uninstall is equally simple.** Single entry in the OS's standard uninstall list; removes the app and offers (doesn't force) to delete local data. Non-technical users judge trustworthiness partly by how easy an exit is, not just entry.
 
-### 7.9 Rewind & Self-Repair
+### 7.9 Rewind and self-repair
 
 Non-technical users can't debug a stuck or broken agent, so Addison needs a built-in "undo everything back to a good state" command that doesn't require understanding what went wrong.
 
@@ -685,9 +685,9 @@ Non-technical users can't debug a stuck or broken agent, so Addison needs a buil
 
 Design implications:
 - Every tool that mutates state (`write_file`, `delete_file`, `save_setting`) must implement a paired `undo()` at registration time; this is a constraint on the tool interface itself (§7.4), not an optional add-on. A tool without a defined undo path is automatically capped at "low risk / read-only" until one exists.
-- Snapshots are stored locally (diffs or full copies, whichever is cheaper per file type) with a rolling retention window (e.g., last 20 actions or 7 days, configurable). *(**Narrowed to reverted rows, owner decision 2026-08-08.** The window still applies, but only to rows already put back; an unreverted row describes a change still on disk and its payload is the only way back from it. So retention no longer bounds the unreverted subset; that is bounded where it is read instead. `addison-engineering-spec.md` §4.5 owns the rule and the cost.)*
+- Snapshots are stored locally (diffs or full copies, whichever is cheaper per file type) with a rolling retention window (for example, last 20 actions or 7 days, configurable). *(**Narrowed to reverted rows, owner decision 2026-08-08.** The window still applies, but only to rows already put back; an unreverted row describes a change still on disk and its payload is the only way back from it. So retention no longer bounds the unreverted subset; that is bounded where it is read instead. `addison-engineering-spec.md` §4.5 owns the rule and the cost.)*
 - The rewind/self-repair control lives in the Activity Panel (§7.1) at all times, not buried in Settings; it's the panic button, and panic buttons need to be where the panic is.
-- A harder "Reset Addison" exists one level down in Settings for the rare case of genuinely corrupted local state (e.g., a malformed SQLite file); this clears app state but explicitly does not touch the versioned file snapshots, so a full reset still leaves user files recoverable.
+- A harder "Reset Addison" exists one level down in Settings for the rare case of genuinely corrupted local state (for example, a malformed SQLite file); this clears app state but explicitly does not touch the versioned file snapshots, so a full reset still leaves user files recoverable.
 - This whole feature is a natural fit for local-first, versioned storage, closer in spirit to how you're already thinking about Almanac's data model than a bolt-on, so the underlying snapshot mechanism may be worth designing once and sharing between the two projects.
 
 #### 7.9.1 V1 Commands
@@ -707,12 +707,12 @@ Same principle as the tool list in §7.4.1: a short, concrete set for launch rat
 
 **Explicitly not typed/slash commands in v1.** A command syntax (`/rewind 3`) is a natural fit for a developer tool and actively wrong for this persona: it reintroduces the exact "you need to know special vocabulary" problem the whole product is designed to avoid. Every command here is a labeled button with a one-line plain-language description, discoverable by looking, not by knowing.
 
-### 7.10 Messaging Channel Integration (Phase 4)
+### 7.10 Messaging channel integration (Phase 4)
 
 Deferred from v1 (§4) but scoped here since it changes several earlier decisions once it's built.
 
 - **Trust model shift.** Anything arriving over WhatsApp/Telegram from an outside contact is untrusted input by default: same handling as web content in §9, but now the "attacker" can be anyone with the linked number, not just a malicious webpage.
-- **Identity/authorization.** Needs an explicit pairing step (e.g., a one-time code shown in the desktop app, sent once to the messaging account being linked) so a stranger who somehow has the number can't just start issuing commands to the user's agent.
+- **Identity/authorization.** Needs an explicit pairing step (for example, a one-time code shown in the desktop app, sent once to the messaging account being linked) so a stranger who somehow has the number can't just start issuing commands to the user's agent.
 - **Always-on requirement.** Messaging only works if something is listening even when the desktop app is closed; this pushes the managed-proxy backend (§7.5, option 3) from "nice for zero-key onboarding" to "required infrastructure," since a purely local desktop process can't receive a WhatsApp message while asleep.
 - **Platform choice matters.** Telegram's Bot API is free, well-documented, and has no business-verification friction; a natural first target. WhatsApp requires the Business API, a verified business, and per-message costs from Meta: realistically a later, costlier addition once Telegram proves the pattern works. SMS sits in between (cheap gateways exist, but per-message cost is real at any scale).
 - **Reduced tool surface over messaging.** Even once channels exist, the higher-risk tool tiers (§7.4) likely stay desktop-only at first; a stray WhatsApp message shouldn't be able to trigger a file-deletion the way a deliberate desktop chat can, until the identity/authorization story above is fully hardened.
@@ -723,7 +723,7 @@ Addison serves two audiences from one product: the non-technical primary persona
 
 **The load-bearing principle:** a Profile changes presentation and defaults, never the security posture. Every invariant in §9 (per-action consent, capability allow-list, keys never in the frontend) and §7.9 (undo-at-registration, no privilege escalation) holds identically in every profile. A profile is *configuration*, not a second codebase and not a way to switch safety off. This is what keeps "also for developers" from quietly undoing the entire trust model the product is built on.
 
-**Simple (default).** Everything else in this doc, unchanged: the Setup Assistant onboarding (§7.5.1), the narrow tool set (§7.4.1), plain-language permission cards, translated errors (goal 5), no jargon, no config or code surfaces. This is the *protected* default and must never be degraded by the existence of the other profiles; developer affordances are simply not rendered here. A non-technical user can live in this profile forever and never learn another exists.
+**Simple (default).** Everything else in this doc, unchanged: the Setup Assistant onboarding (§7.5.1), the narrow tool set (§7.4.1), plain-language permission cards, translated errors (goal 5), no jargon, no config or code surfaces. This is the *protected* default and must never be degraded by the existence of the other profiles; developer affordances are not rendered here. A non-technical user can live in this profile forever and never learn another exists.
 
 **Developer (opt-in).** Same engine, more of it exposed:
 - **Model/BYOK configuration up front**, shortening or skipping the Setup Assistant (§7.5.1).
@@ -798,7 +798,7 @@ they cannot reshape the floors.
 
 ---
 
-## 8. Onboarding Flow (first 60 seconds)
+## 8. Onboarding flow (first 60 seconds)
 
 1. Download page detects OS, offers the single right installer (no "choose your platform" grid with six options).
 2. Installer runs, app opens directly into chat; no account screen blocking the first message.
@@ -812,12 +812,12 @@ This flow is the actual deliverable of the "easier setup" requirement; it's a UX
 
 ---
 
-## 9. Security & Sandboxing Model
+## 9. Security and sandboxing model
 
 Threat model is different from OpenClaw's: the user isn't defending a server from a remote attacker, they're trusting an agent running with their own OS permissions to not do something destructive by mistake (bad tool call, prompt injection from a malicious webpage/document, model error).
 
 Mitigations:
-- **Capability allow-list, not a shell.** Tools are individual typed functions (`read_file(path)`, `web_search(query)`), not "run arbitrary command." This eliminates most of the attack surface OpenClaw explicitly warns about (per the Register/Zylon coverage in the search results above, where "endless supply of security flaws" tracks directly back to broad shell/computer-control access). **Amended 2026-07-26, RESOLVED 2026-07-31 (Phase-2 step 5.5).** Phase-2 step 5 shipped `run_command`, a real shell, in OPEN mode only (absent from `registry.visible_tools(SAFE)`, refused at dispatch outside OPEN), and for five days the property this bullet protected, *the model cannot issue an unbounded OS effect*, was not re-established, unlike the picker-scoping bullet below which named where its boundary had moved to. It is re-established now, in that same idiom: **the boundary moved to the process edge.** `run_command` no longer executes in the Agent Core at all; it crosses the ShellBridge (`shell.runCommand`) and the Rust shell runs it under a **Seatbelt profile generated from the live trusted roots**: reads stay broad, writes are denied wholesale and re-permitted only inside folders the person has explicitly trusted, and the data-dir denies are emitted *after* every allow so the recovery floor wins even against a trusted root that contains it. Above that sits a **pre-gate denylist** that cannot be approved away (Addison's own restore storage, `~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`), checked at all three sites a command can start: chat, a routine step, and a widget's Run pill. The permission card is unchanged and still cards per invocation with the exact command text, and it is simply no longer the only layer. **G3's "the restore path is itself unbreakable" is true again in OPEN**, and [SAFETY.md](SAFETY.md) owns that wording (its five-day qualification came off when step 5.5 items 1-3 landed), pinned by `an_approved_command_cannot_delete_the_recovery_floor` in `shell/src-tauri/src/exec.rs`, which is live and mutation-proven rather than aspirational. Two limits are stated rather than rounded off (a platform with no profile, and the data/code boundary) and both are written out once, in §9.x below.
+- **Capability allow-list, not a shell.** Tools are individual typed functions (`read_file(path)`, `web_search(query)`), not "run arbitrary command." This eliminates most of the attack surface OpenClaw explicitly warns about (per the Register/Zylon coverage in the search results above, where "endless supply of security flaws" tracks directly back to broad shell/computer-control access). **Amended 2026-07-26, RESOLVED 2026-07-31 (Phase-2 step 5.5).** Phase-2 step 5 shipped `run_command`, a real shell, in OPEN mode only (absent from `registry.visible_tools(SAFE)`, refused at dispatch outside OPEN), and for five days the property this bullet protected, *the model cannot issue an unbounded OS effect*, was not re-established, unlike the picker-scoping bullet below which named where its boundary had moved to. It is re-established now, in that same idiom: **the boundary moved to the process edge.** `run_command` no longer executes in the Agent Core at all; it crosses the ShellBridge (`shell.runCommand`) and the Rust shell runs it under a **Seatbelt profile generated from the live trusted roots**: reads stay broad, writes are denied wholesale and re-permitted only inside folders the person has explicitly trusted, and the data-dir denies are emitted *after* every allow so the recovery floor wins even against a trusted root that contains it. Above that sits a **pre-gate denylist** that cannot be approved away (Addison's own restore storage, `~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`), checked at all three sites a command can start: chat, a routine step, and a widget's Run pill. The permission card is unchanged and still cards per invocation with the exact command text, and it is no longer the only layer. **G3's "the restore path is itself unbreakable" is true again in OPEN**, and [SAFETY.md](SAFETY.md) owns that wording (its five-day qualification came off when step 5.5 items 1-3 landed), pinned by `an_approved_command_cannot_delete_the_recovery_floor` in `shell/src-tauri/src/exec.rs`, which is live and mutation-proven rather than aspirational. Two limits are stated rather than rounded off (a platform with no profile, and the data/code boundary) and both are written out once, in §9.x below.
 - **Filesystem scope by picker, not by path.** The agent never gets a raw path string to open; it gets a handle to whatever the OS-native file picker returned, so it structurally cannot wander outside what the user selected. **Amended 2026-07-24 (Phase-2 step 5, owner-scoped decision: this bullet is unchanged for the SAFE tools, and the OPEN harness departs from it deliberately).** A coding harness cannot work through a per-file picker: an editing loop touches dozens of files, and `save_new_file` refuses to overwrite at all (that refusal is precisely what keeps its undo trivial). So the two path-bounded file tools (`read_project_file`, `write_project_file`, OPEN-only when this was written) scope by **trusted root** instead: the user grants one project directory through the OS folder picker, still a native dialog and still a deliberate act, and every path the tools resolve must sit inside it. The property the picker was protecting is preserved rather than dropped, because the boundary is still enforced at the process edge: the core hard-refuses an out-of-root path before the tool runs, **and the Rust shell independently refuses Addison's own data directory**, so a bypass of the core's check still cannot reach the recovery floor's storage. What genuinely changed is the *granularity* of consent, from per-file to per-directory-per-grant, and only inside the profile that asked for a coding harness. **Amended again 2026-08-11 (owner decision; [SAFETY.md](SAFETY.md) invariant 1 owns it).** Those two tools are no longer OPEN-only: Simple has them as well, because a companion that cannot change a line in an existing file, only save a new file beside it, is failing the person it is for. So trusted-root scoping now reaches the SAFE surface too, and what replaces the picker's per-file consent there is a **card before every edit, naming the file**, on top of the same trusted-root confinement, the same refusal of Addison's own storage and the same guaranteed undo. Simple's *own* file tools (`read_file`, `save_file`) keep picker scoping exactly as written above. **Amended once more 2026-08-12 (owner decision):** the trust-granting surface is no longer Developer/Custom: Simple has the "Folders Addison may work in" panel too, with the same two-step ceremony (OS folder picker, then Addison's own confirm) and its own honest copy, so the per-directory grant is a deliberate act in every profile. [SAFETY.md](SAFETY.md) invariant 1 owns it.
 - **Destructive actions require re-confirmation with a preview.** "Delete `invoice_march.pdf`?" always shows the actual filename, never a batched/summarized action.
 - **Prompt-injection awareness.** Content pulled from tool results (web pages, documents) is marked as untrusted data in the model context, and the system prompt instructs the model not to treat instructions found inside tool output as commands from the user; the same pattern used in Claude's own tool-result handling.
@@ -940,7 +940,7 @@ Claude Code says outright that no system is immune. Addison's boundaries:
   requesting one. The card is the human checkpoint; the denylist and the sandbox
   bound what an approved command can reach. What none of them do is make the
   *request* not happen. Untrusted-content screening shipped on 2026-08-13
-  ([`untrusted-screening-plan.md`](untrusted-screening-plan.md)) and marks
+  ([`untrusted-screening-plan.md`](plans/untrusted-screening-plan.md)) and marks
   instruction-shaped text on the way in, which reduces this and does not close it:
   it is a backstop over enumerated patterns, and the card is still the checkpoint.
 - **Exfiltration through a legitimately-approved command.** The Seatbelt profile
@@ -960,11 +960,14 @@ Claude Code says outright that no system is immune. Addison's boundaries:
   KNOWN-GAPS, which owns its status.
 - **`sandbox-exec` is formally deprecated by Apple.** It still works and is what
   Claude Code and Codex CLI both rely on. Acceptable; not permanent.
-- **Platforms with no profile.** Linux has no Landlock/bubblewrap path yet, so a
-  command runs unconfined; the response carries `sandboxed: false` and the tool
-  prints it above the output. Never silent, but never protected either. Tracked in
-  KNOWN-GAPS, which owns its status; v1 is macOS, so it bites the day a second
-  platform ships.
+- **Platforms with no profile.** Linux has no Landlock/bubblewrap path, and Windows
+  has no restricted-token or AppContainer path either, so on both a command runs
+  unconfined; the response carries `sandboxed: false` and the tool prints it above
+  the output. Never silent, but never protected either. Tracked in KNOWN-GAPS, which
+  owns its status. This used to end *"v1 is macOS, so it bites the day a second
+  platform ships"* — Windows became that platform on 2026-08-23, and the posture
+  there was chosen rather than inherited
+  ([windows-port-plan.md](plans/windows-port-plan.md) §2).
 - **Hardlinks inside a trusted root.** `realpath` cannot see them, so a hardlink
   to a file outside the root is treated as inside it. Inherent to any
   realpath-based confinement.
@@ -977,7 +980,7 @@ Claude Code says outright that no system is immune. Addison's boundaries:
 
 ---
 
-## 10. Tech Stack Summary
+## 10. Tech stack summary
 
 | Layer | Choice | Rationale |
 |---|---|---|
@@ -1008,7 +1011,7 @@ Build the free relay (§7.5.1): integrate at least one, ideally two, free hosted
 Installer signing/notarization for macOS/Windows, auto-update pipeline, a real landing page, expand tool set carefully (email drafting, calendar look-ups), always tiered by risk per §7.4. Rewind/self-repair (§7.9) ships no later than this phase; it's a trust prerequisite for widening the tool set, not a nice-to-have that comes after.
 
 > **Amended 2026-07-25: Phase 3 is no longer packaging-only.**
-> **`docs/phase-3-review-surface-plan.md`** (approved 2026-07-25, **built
+> **`docs/plans/phase-3-review-surface-plan.md`** (approved 2026-07-25, **built
 > 2026-08-08**) adds a second track to this phase: a Developer/OPEN **review
 > surface**: a file tree over trusted roots, a read-only viewer, a real **diff** of
 > every edit Addison has made that is still live on disk, and per-file revert.
@@ -1094,7 +1097,7 @@ three bars: persona fit (§5), full compatibility with every safety invariant
    > directions, the picked file's text is screened, and one exact card line rides
    > on a network step carrying an earlier file-read's text. The body above stays as
    > written, since it is the survey entry that started it and it is history now.
-   > [`routine-sharing-plan.md`](routine-sharing-plan.md) owns the subject, what
+   > [`routine-sharing-plan.md`](plans/routine-sharing-plan.md) owns the subject, what
    > shipped, and what remains uncaught.
 6. **Untrusted-content screening**: an advisory defense-in-depth layer that
    inspects tool-returned content (web results, file text) for instruction-like
@@ -1106,7 +1109,7 @@ three bars: persona fit (§5), full compatibility with every safety invariant
    > *Pulled forward and BUILT, 2026-08-13.* The v2 deferral expired: its triggers
    > fired and the owner took the decision. The body above stays as written, since
    > it is the survey entry that started it and it is history now.
-   > [`untrusted-screening-plan.md`](untrusted-screening-plan.md) owns the subject:
+   > [`untrusted-screening-plan.md`](plans/untrusted-screening-plan.md) owns the subject:
    > what shipped, the six decisions of that day, and the honest statement of the
    > strength (a backstop over enumerated patterns, not a boundary; prose it has no
    > pattern for passes untouched). One line above is worth keeping in mind rather
@@ -1154,7 +1157,7 @@ track (post-greenlight):
    bounded by the folders the person has trusted, a short list of things that
    cannot be approved at all, redaction of credentials out of command output, and a
    record of every tool decision. **Shipped 2026-07-31**, and §9's first mitigation
-   was brought current with it; [plan](step-5.5-containment-plan.md).
+   was brought current with it; [plan](plans/step-5.5-containment-plan.md).
 6. **Widget capability tiers + expanded vocabulary**: safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers and safe storage
    (buildable in all modes), capability-tier gating, capability-aware guidance.
@@ -1170,7 +1173,7 @@ track (post-greenlight):
 
 **[`../ROADMAP.md`](../ROADMAP.md) owns status**; this list is the *order*. Steps
 6–8 were also the prerequisites for the Phase-3 **review surface**
-(`docs/phase-3-review-surface-plan.md`), which was built 2026-08-08; see the
+(`docs/plans/phase-3-review-surface-plan.md`), which was built 2026-08-08; see the
 Phase-3 note above.
 
 Steps 3–4 are companion-facing and independent of the harness, so they can run in
@@ -1201,7 +1204,7 @@ question (§14, Q13, now half-answered).
 
 ---
 
-## 13. Comparison to Existing Options
+## 13. Comparison to existing options
 
 *Updated 2026-07-17 from the ecosystem survey (sourced dossier; adopted features
 in §11). Columns beyond the original two reflect the survey's primary sources.*
@@ -1237,7 +1240,7 @@ built-in schedulers).
 
 ---
 
-## 14. Open Questions
+## 14. Open questions
 
 1. Is a desktop app the right form factor, or does a hosted web app remove even the installer step? (Tradeoff: hosted means you own inference cost for every user, always, with no offline/local-first story.)
 2. How much of Almanac's local-first storage layer can be shared/reused here, versus being a genuinely separate codebase?
@@ -1265,7 +1268,7 @@ deferring 14 rather than answering it.)*
    type `!run install`"), while a code minted at the moment of asking is the one
    string observed content could not have written down in advance. It gates
    **arming** OS-run automation, never ordinary chat.
-   [step-8-automation-plan.md](step-8-automation-plan.md) §3 owns the mechanics.
+   [step-8-automation-plan.md](plans/step-8-automation-plan.md) §3 owns the mechanics.
 10. ~~**Snapshot retention**~~: **RESOLVED 2026-07-20 (Phase-2 step 1).** Keep the
     most recent **50 or 30 days, whichever keeps more**, with two exemptions written
     into the SQL rather than left to a caller: permanent rows, and the newest **two**

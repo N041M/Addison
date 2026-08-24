@@ -399,7 +399,7 @@ mapping against a stale picture. None of them change the design language.
 
 The Developer **review surface** (file tree, read-only viewer, a diff of every edit
 Addison has made that is still live on disk, per-file revert) **shipped 2026-08-08**;
-[`../phase-3-review-surface-plan.md`](../phase-3-review-surface-plan.md) owns the build
+[`../phase-3-review-surface-plan.md`](../plans/phase-3-review-surface-plan.md) owns the build
 and everything about it that is not design. This section is the **design mapping**, and
 it is written first for the reason the rest of this file exists: the brief above has
 **no vocabulary for code**. Nothing in the prototype is a document surface, and a code

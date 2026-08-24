@@ -84,7 +84,7 @@ def test_import_mints_a_fresh_id_and_never_the_sender_s():
     assert first.id != second.id
 
 
-# --- the whitelist ----------------------------------------------------------
+# --- the allowlist ----------------------------------------------------------
 
 
 def test_to_portable_emits_exactly_these_keys():

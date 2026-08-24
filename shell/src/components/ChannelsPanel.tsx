@@ -1,5 +1,5 @@
 // Your phone — the Settings face of the messaging channels (phases 1-2 of three;
-// docs/messaging-channel-plan.md owns the design). Shown ONLY on the Developer and
+// docs/plans/messaging-channel-plan.md owns the design). Shown ONLY on the Developer and
 // Custom surfaces (keyed off the active profile, never the policy mode); Simple
 // never sees it, and the core independently refuses `channel.add` outside Developer.
 //
@@ -103,13 +103,13 @@ const DISMISS_ACTION = "Dismiss";
  * that is listening).
  *
  * Neither sentence uses the word "queue": what a person has is a phone that was sent
- * a message while their Mac was shut, and the two things Addison can do about it are
+ * a message while their computer was shut, and the two things Addison can do about it are
  * say so, or answer it late. */
 const ON_WAKE_LINE = {
   decline:
-    "If a message arrives while this Mac is asleep, Addison says it wasn't there " +
+    "If a message arrives while this computer is asleep, Addison says it wasn't there " +
     "rather than answering late.",
-  answer: "Addison answers messages that arrived while this Mac was asleep.",
+  answer: "Addison answers messages that arrived while this computer was asleep.",
 } as const;
 const ON_WAKE_ACTION = {
   decline: "answer late messages",

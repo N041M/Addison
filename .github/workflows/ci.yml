@@ -8,6 +8,16 @@
 #
 # A convention is only as strong as its enforcement; before this workflow every
 # gate depended on someone remembering to run it before merging.
+#
+# TWO MORE SINCE THE WINDOWS PORT (2026-08-23), both running the SAME script on a
+# Windows runner:
+#
+#   rust-windows    → the whole Rust job, on the platform whose `#[cfg]` arms no
+#                     other runner compiles. `exec.rs`'s Job Object and
+#                     `PeekNamedPipe` paths exist only here.
+#   python-windows  → `gates.sh python-floors`, a NAMED SUBSET and not the suite.
+#                     That script says why, and the reason is written there rather
+#                     than here so there is still exactly one copy of it.
 name: ci
 
 on:
@@ -86,3 +96,40 @@ jobs:
       # never a CI gate before, though it has been clean and locally expected.
       - name: Gates (cargo test · clippy)
         run: ./scripts/gates.sh rust
+
+  rust-windows:
+    name: rust (cargo test, Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No system dependencies: windows-latest ships the MSVC toolchain, and the
+      # WebView2 runtime the Tauri shell links against is part of Windows itself.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shell/src-tauri
+      # The same script, through the bash that ships with the runner. `shell: bash`
+      # is required — the default on this runner is PowerShell, which would not run
+      # it at all.
+      - name: Gates (cargo test · clippy)
+        shell: bash
+        run: ./scripts/gates.sh rust
+
+  python-windows:
+    name: python (floors, Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent_core/pyproject.toml
+      - name: Install agent core (editable, with dev extras)
+        run: pip install -e "agent_core[dev]"
+      # A DELIBERATELY NARROWER JOB than the `python` one above, and the narrowing
+      # lives in scripts/gates.sh where it can be widened file by file. What it is
+      # here to catch: the Windows half of the G2 fence, whose assertions skip on
+      # every other runner — a test that only ever skips has never run.
+      - name: Gates (python floors)
+        shell: bash
+        run: ./scripts/gates.sh python-floors

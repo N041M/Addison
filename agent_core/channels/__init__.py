@@ -17,5 +17,5 @@ What lives here is everything transport-specific and nothing else:
 
 Nothing above this package knows the word Telegram; nothing in it knows what a
 turn, a tool or a permission gate is. That split is what makes a second transport
-a file rather than a project (docs/messaging-channel-plan.md §3.2–§3.3).
+a file rather than a project (docs/plans/messaging-channel-plan.md §3.2–§3.3).
 """

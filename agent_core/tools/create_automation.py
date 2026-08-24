@@ -7,7 +7,7 @@ writes one row to the ``automations`` table. It starts no process, writes no fil
 touches no ``~/Library/LaunchAgents``, and cannot. Arming — the typed shell surface,
 the keyword-nonce card, ``launchctl`` — is phase 3 and does not exist in the tree,
 which is why every answer this tool gives ends with the same sentence saying so.
-[docs/step-8-automation-plan.md](../../docs/step-8-automation-plan.md) §4 owns the
+[docs/plans/step-8-automation-plan.md](../../docs/plans/step-8-automation-plan.md) §4 owns the
 phase order.
 
 **Dev-only (plan §5.3).** The payload of an automation is a shell command and SAFE

@@ -16,7 +16,7 @@
 // second Run, so it is an ordinary accent action; a routine the shareable format
 // cannot express comes back refused, and the refusal is a sentence naming the
 // field, shown under that routine's own row rather than anywhere global.
-// docs/routine-sharing-plan.md owns the subject.
+// docs/plans/routine-sharing-plan.md owns the subject.
 
 import { useEffect, useState } from "react";
 import { ipc, isEngineConnected, subscribe } from "../ipc/client";

@@ -535,7 +535,7 @@ class IpcShellBridge:
         loop before each poll, and the send side before each answer. Phase 1 shipped
         this uncalled on purpose, so that the phase which added the adapter needed no
         change to this bridge, to the shell's dispatch or to the keychain module — and
-        it needed none (docs/messaging-channel-plan.md §3.9).
+        it needed none (docs/plans/messaging-channel-plan.md §3.9).
 
         Modelled on ``get_provider_key`` and deliberately NOT routed through it: the
         provider path carries a mint ledger, replace-detection and the legacy-account

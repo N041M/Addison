@@ -162,7 +162,7 @@ describe("parseWidgetList", () => {
       widgets: [
         { spec: { kind: "stat", source: "connections", title: "x" } }, // no id
         { id: "a", spec: { kind: "routine", title: "no routineId" } }, // missing routineId
-        { id: "b", spec: { kind: "stat", source: "made_up_source", title: "x" } }, // source off whitelist
+        { id: "b", spec: { kind: "stat", source: "made_up_source", title: "x" } }, // source off allowlist
         { id: "c", spec: { kind: "command", title: "no command" } }, // missing command
         { id: "d", spec: { kind: "mystery", title: "x" } }, // unknown kind
         { id: "e", spec: { kind: "stat", source: "tokens_month" } }, // missing title

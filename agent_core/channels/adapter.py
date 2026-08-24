@@ -1,7 +1,7 @@
 """The transport contract — everything a messaging channel must be able to do.
 
 Everything transport-specific sits behind this file, and nothing above it knows
-the word Telegram (docs/messaging-channel-plan.md §3.2, which owns this design).
+the word Telegram (docs/plans/messaging-channel-plan.md §3.2, which owns this design).
 
 FOUR VALUE TYPES, ONE PROTOCOL, THREE EXCEPTIONS. A ``Protocol`` rather than a
 base class, matching how ``Tool`` and ``ShellBridge`` are declared in
@@ -52,7 +52,7 @@ class InboundMessage:
     received_at: int
     #: Unix seconds the TRANSPORT claims the person sent it, or 0 when it did not
     #: say. THE ONE PLACE A TRANSPORT'S CLOCK IS READ, and it is read for exactly
-    #: one question: was this message waiting in a queue while the Mac was asleep
+    #: one question: was this message waiting in a queue while the computer was asleep
     #: (owner decision 8, default *decline*)? Addison's own clock cannot answer
     #: that — a message that arrived during a fifty-second long poll and one that
     #: was queued overnight both come back the instant the poll returns, so

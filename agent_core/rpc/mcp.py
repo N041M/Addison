@@ -9,7 +9,7 @@ own claim about its own risk is exactly what v1 refuses to trust. What the gate 
 DOES with a destructive call is the gate's, and the Custom profile's guards can tune
 it (``permissions/gate.py``, ``policy.GuardConfig``); on the defaults that is a card
 per invocation. Phase 4 settled what may come back.
-[docs/step-7-mcp-plan.md](../../docs/step-7-mcp-plan.md) owns the phase order, and
+[docs/plans/step-7-mcp-plan.md](../../docs/plans/step-7-mcp-plan.md) owns the phase order, and
 ``agent_core/mcp_catalog.py`` owns the one constant that turned dispatch on.
 
 **This module still holds no protocol and no registration**, and phase 3 kept it

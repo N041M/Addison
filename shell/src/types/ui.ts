@@ -257,7 +257,7 @@ export interface ArtifactUnavailable {
 
 // ---------------------------------------------------------------------------
 // Widgets — DECLARATIVE specs mirrored from the core (agent_core/widgets.py).
-// A CLOSED set of kinds: two launchers (a saved-routine Run pill, a whitelisted
+// A CLOSED set of kinds: two launchers (a saved-routine Run pill, an allowlisted
 // stat display), three interactive SAFE kinds (checklist, note, timer), and the
 // Developer-only command widget. NEVER code. The frontend renders these; it
 // never constructs or evaluates one, and a kind it does not know is DROPPED.
@@ -699,7 +699,7 @@ export type ChannelKind = "telegram";
  * never be rendered as "no token saved". */
 export type ChannelTokenPresence = "present" | "absent" | "unknown";
 
-/** What Addison does with a message that arrived while this Mac was asleep — the
+/** What Addison does with a message that arrived while this computer was asleep — the
  * core's closed two-value vocabulary (owner decision 8). "decline" is the default
  * and the safe direction: an unrecognised value must read as "Addison will say it
  * wasn't there", never as "Addison will answer whatever it finds". */
@@ -721,7 +721,7 @@ export interface Channel {
   enabled: boolean;
   /** Whether a token is believed saved. Never a token, a length or a prefix. */
   tokenPresent: ChannelTokenPresence;
-  /** What to do with a message that arrived while this Mac was asleep or Addison
+  /** What to do with a message that arrived while this computer was asleep or Addison
    * was not running: say it wasn't there ("decline", the default and the safe
    * direction), or answer it on the way back in ("answer"). */
   onWake: ChannelOnWake;

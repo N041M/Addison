@@ -355,9 +355,16 @@ struct MintLedger {
 impl MintLedger {
     /// The live ledger, beside Addison's own data.
     fn live() -> Self {
-        Self { dir: std::env::var("HOME").ok().filter(|home| !home.is_empty()).map(|home| {
-            PathBuf::from(home).join(".addison")
-        }) }
+        // `home_from_env` rather than `HOME` directly: Windows does not set that
+        // variable, and the ledger would have had nowhere to live on the platform —
+        // benign today (its only consumer vetoes a self-heal that a Windows read
+        // never triggers, because there is no credential-ACL prompt there to make a
+        // read slow) and a silent platform difference all the same. One lookup for
+        // "the user's home", in one place, is the rule that stops the next one
+        // mattering.
+        Self {
+            dir: crate::filesystem::home_from_env().map(|home| PathBuf::from(home).join(".addison")),
+        }
     }
 
     fn path(&self) -> Option<PathBuf> {
@@ -1541,7 +1548,7 @@ fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
 // ===========================================================================
 // MESSAGING-CHANNEL TOKENS — a PARALLEL pair, never a call into the provider path
 // ===========================================================================
-// Messaging channels phase 1 (docs/messaging-channel-plan.md §3.9). A channel's bot
+// Messaging channels phase 1 (docs/plans/messaging-channel-plan.md §3.9). A channel's bot
 // token is a credential the person types into Settings, so it goes where every other
 // credential goes: from the webview straight into the OS keychain, on the same
 // SERVICE, under its own account namespace `channel-key:<kind>` — and never through

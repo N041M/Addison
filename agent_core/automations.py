@@ -15,7 +15,7 @@ this module holds is what it always held: the row shape, the closed schedule
 vocabulary, the two renderers (``schedule_sentence``, ``plist_text``), the
 authoring door's validators, and ``label_is_addisons_own`` — pure functions, no
 bridge, nothing that could itself start or stop anything.
-[docs/step-8-automation-plan.md](../docs/step-8-automation-plan.md) owns the phase
+[docs/plans/step-8-automation-plan.md](../docs/plans/step-8-automation-plan.md) owns the phase
 order.
 
 **Nothing here records whether an automation is ARMED** — no field, no property, no

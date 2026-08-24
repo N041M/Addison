@@ -1,4 +1,4 @@
-"""MCP server configuration — step 7, PHASE 1 (docs/step-7-mcp-plan.md §4.1).
+"""MCP server configuration — step 7, PHASE 1 (docs/plans/step-7-mcp-plan.md §4.1).
 
 Phase 1 ships configuration and nothing else: the ``mcp_servers`` table, the
 ``mcp.list``/``add``/``remove`` RPC, and the store-boundary URL check. **No protocol

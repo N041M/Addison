@@ -1,4 +1,4 @@
-# Addison: Verification Runbook
+# Addison: verification runbook
 
 The *coordinator's* list: automated gates, scripted end-to-end proofs, and the
 review obligations that a green CI run does not cover. Companion to

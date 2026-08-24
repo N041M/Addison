@@ -297,7 +297,7 @@ sequenceDiagram
 
 Addison proposes widgets the same way it proposes routines: a draft is held in the
 core and nothing is saved until an explicit confirm. A widget is a **declarative**
-spec (`agent_core/widgets.py`): a saved-routine Run pill, a whitelisted stat display,
+spec (`agent_core/widgets.py`): a saved-routine Run pill, an allowlisted stat display,
 or one of the three interactive kinds (checklist, note, timer). Never code, it is
 validated at save and at render **against the current policy mode**. In OPEN mode a
 sixth `command` kind is valid (it runs `run_command` on click, so the destructive-prompt
@@ -650,7 +650,7 @@ they are gated, logged, and undo-aware like any tool. **MCP is Developer-only fo
 (owner decision 2026-08-06): a discovered tool registers `dev_only=True`, so **no MCP tool
 enters the SAFE view at all**; what SAFE would ever admit is deferred rather than
 answered, and invariant 2 keeps a mutating, un-undoable MCP tool out of that view
-automatically whatever is decided ([step-7-mcp-plan.md](step-7-mcp-plan.md) owns this).
+automatically whatever is decided ([step-7-mcp-plan.md](plans/step-7-mcp-plan.md) owns this).
 Connecting the server is reversible config (flow 11 plumbing).
 
 The registration is HIGH and **destructive unconditionally**, because a server declares
@@ -699,7 +699,7 @@ to that never landed, and one naming a tool nothing is registered under.
 ## 16. The review surface: seeing an edit, and putting one file back
 
 **Phase 3, the Developer review surface, BUILT 2026-08-08**
-([`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns the build).
+([`phase-3-review-surface-plan.md`](plans/phase-3-review-surface-plan.md) owns the build).
 It belongs here for the reason this document exists: it crosses all three process
 boundaries on every action, and **none of it is a registry tool**. A person clicking
 a folder open is not the model acting, so the whole surface is `workspace.*` RPC;
@@ -779,7 +779,7 @@ draws: *a phone can ask Addison to look something up, and everything else comes 
 a plain sentence and a note waiting on the desk.* `REMOTE_TOOL_IDS` carries three
 read-only ids — `calculator`, `web_search`, `read_web_page` — and is asserted to be a
 subset of `visible_tools(SAFE)`, so a phone is never offered a tool Simple could not be
-offered. [messaging-channel-plan.md](messaging-channel-plan.md) owns the design; §3.4
+offered. [messaging-channel-plan.md](plans/messaging-channel-plan.md) owns the design; §3.4
 owns the G2 argument the first two lines below stand on.
 
 **Outbound only, no listener of any kind.** The core has no OS permissions of its own

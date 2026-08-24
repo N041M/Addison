@@ -3,7 +3,7 @@
 ================================ SAFETY FRAME ================================
 **G2 — ADDISON NEVER TRIGGERS ITSELF, and this is the file that comes nearest to
 that floor.** The poll loop repeats, so the sentence deserves more than an
-assertion (docs/messaging-channel-plan.md §3.4, which owns the argument):
+assertion (docs/plans/messaging-channel-plan.md §3.4, which owns the argument):
 
   * **It hands no callback to a clock.** ``tests/test_g2_no_self_trigger.py`` bans
     ``Timer``, ``scheduler``, ``enterabs``, ``alarm``, ``call_later``, ``call_at``,
@@ -639,7 +639,7 @@ class ChannelService:
         nothing and keeps the verdict travelling WITH the text — the worker marks
         the copy the model is handed using this verdict rather than re-deriving one.
         This is the SIXTH origin of screened text and the first that is not a tool
-        result (docs/untrusted-screening-plan.md owns the list and the honest
+        result (docs/plans/untrusted-screening-plan.md owns the list and the honest
         statement of what screening is worth: a backstop, not a boundary).
 
         ``request_id`` is None because nothing is waiting for a JSON-RPC reply."""

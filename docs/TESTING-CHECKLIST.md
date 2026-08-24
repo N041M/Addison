@@ -1,4 +1,4 @@
-# Addison v1: Manual Desktop Testing Pass
+# Addison v1: manual desktop testing pass
 
 Structured pass over every subsystem, one numbered step each. Run the app with
 `cd shell && npm run tauri dev` and keep that terminal visible. The engine's
@@ -47,7 +47,7 @@ stderr.
 
 ## 2. Plain chat
 
-**Do:** ask something tool-free, e.g. "What's a good way to remember names?"
+**Do:** ask something tool-free, for example, "What's a good way to remember names?"
 **Expect:** a streamed reply in plain language. No permission card, no
 activity panel. A second message keeps context from the first.
 
@@ -64,7 +64,7 @@ No risk codes, tool ids, or jargon anywhere on the card.
 
 ## 4. Web search
 
-**Do:** ask something that needs today's information (e.g. "What's the weather
+**Do:** ask something that needs today's information (for example, "What's the weather
 in Prague right now?" or a current-events question).
 **Expect:** permission card → Allow → **"Searching the web…"** in the activity
 panel, then an answer grounded in the results. Check the expanded steps name
@@ -72,7 +72,7 @@ the search plainly.
 
 ## 4a. Read a web page
 
-**Do:** ask for something that needs the *contents* of a page, not a link, e.g.
+**Do:** ask for something that needs the *contents* of a page, not a link, for example,
 "What does the front page of bbc.co.uk say right now?" or, after a search,
 "read the first result and tell me what it says."
 **Expect:** permission card → Allow → **"Read a web page"** in the activity
@@ -156,7 +156,7 @@ from the rewound state (later context is genuinely forgotten).
 
 ## 8. Routines: propose, run, remove
 
-**Do:** give a small multi-step task (e.g. steps 3+5 combined: "calculate X
+**Do:** give a small multi-step task (for example, steps 3+5 combined: "calculate X
 and save the result as a file"). After it finishes, look in the **activity
 strip just below the conversation** ("Finished the steps below") for the small
 link **"Save these steps as a routine"**. Click it, and the confirmation card
@@ -172,7 +172,7 @@ the routine is gone from the list.
 ## 9. Model picker + effort levels
 
 **Do:** open the picker by the message box.
-**Expect:** the dynamic model list from your key (raw API names, e.g.
+**Expect:** the dynamic model list from your key (raw API names, for example,
 "Claude Opus 4.8", "Claude Sonnet 5", "Claude Haiku 4.5"), and
 **"How thorough Addison should be"** effort options only on models whose API
 capabilities support them.
@@ -186,7 +186,7 @@ picker reflects it.
 
 **Do:** Settings → **Profile** (last section). Switch Simple → Developer.
 **Expect:** the change applies instantly (technical affordances appear,
-e.g. "Technical details" on messages, routine "View plan") and **persists
+for example, "Technical details" on messages, routine "View plan") and **persists
 across an app restart**.
 **Critical check:** repeat step 3 in each profile. The permission card must
 appear in *both* profiles for the same action: a profile never changes what
@@ -580,7 +580,7 @@ acting."* A recovery that lowers your protections says so.
 **Written before the build; the surface shipped 2026-08-08, so this section is now
 LIVE and is the wave's outstanding work.** The repo's rule is authoritative docs
 before code, which is why it was here first;
-[`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns the build and
+[`phase-3-review-surface-plan.md`](plans/phase-3-review-surface-plan.md) owns the build and
 [`../ROADMAP.md`](../ROADMAP.md) owns whether it has happened. The copy quoted below is
 the plan's, and quoting it **is** the assertion: if the app says something else, either
 the app is wrong or the plan changed and nobody amended this.

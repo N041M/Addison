@@ -1,5 +1,5 @@
 // Messaging channels — the phone connections a person has saved (phases 1–3, all
-// that ship; docs/messaging-channel-plan.md). This hook owns the list, the add/remove
+// that ship; docs/plans/messaging-channel-plan.md). This hook owns the list, the add/remove
 // handlers, the token save, the live status of each connection, the pairing window,
 // the paired-device list, the desk queue, and the two transient lines the panel shows — a plain
 // error (the core's own refusal sentence, or the shell's) and a plain notice. It
@@ -376,7 +376,7 @@ export function useChannels({ connected }: UseChannelsArgs) {
     [refreshChannels],
   );
 
-  /** Choose what happens to a message that arrived while the Mac was asleep (owner
+  /** Choose what happens to a message that arrived while the computer was asleep (owner
    * decision 8). The core refuses "answer" outside Developer in its own words and
    * accepts "decline" in every profile — this hook prints whichever sentence comes
    * back and never writes a second one. */

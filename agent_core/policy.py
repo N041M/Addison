@@ -62,7 +62,7 @@ class TurnSurface(str, Enum):
     nothing to do with the profile — nobody is watching the screen, so a permission
     card would block the worker thread forever (``_ask_once`` waits with no
     timeout), and a read-only tool can still put local material on a transport's
-    servers. See docs/messaging-channel-plan.md §2(d) and §3.6.
+    servers. See docs/plans/messaging-channel-plan.md §2(d) and §3.6.
 
     It lives HERE, beside PolicyMode, because ``tools/registry.py`` and
     ``orchestrator.py`` both need it and ``policy.py`` is the module they already
@@ -203,9 +203,10 @@ def trust_refusal(
 
       * ``_protected_dirs`` — Addison's own storage. Trusting it would put the G3
         recovery floor inside the card-free zone.
-      * ``OS_AUTOMATION_DIRS`` — the places where writing a file IS arming
-        automation (defined beside ``_CREDENTIAL_DIRS`` below; one list, three
-        consumers, step-8 plan §5.5). Trusting one of these would let
+      * ``OS_AUTOMATION_DIRS`` + ``WINDOWS_AUTOMATION_DIRS`` — the places where
+        writing a file IS arming automation (defined beside ``_CREDENTIAL_DIRS``
+        below; one fence, three consumers, step-8 plan §5.5). Trusting one of
+        these would let
         ``write_project_file`` install a launchd job behind an ordinary card,
         which is exactly the arming path G2's keyword gate exists to own.
 
@@ -382,12 +383,53 @@ OS_AUTOMATION_DIRS = (
     "~/.config/systemd",
 )
 
+# Windows's half of the SAME fence (Windows port, 2026-08-23 — see
+# docs/plans/windows-port-plan.md §3). A file written into one of these is not data
+# either: the Startup folders are run at every sign-in, and `System32\Tasks` is
+# where the Task Scheduler keeps the jobs it runs on its own clock. Identical
+# reasoning, identical closedness, identical consumers — both tuples flow through
+# ``_automation_roots()``, which is the one place the fence is expanded.
+#
+# A SECOND TUPLE RATHER THAN MORE ROWS IN THE FIRST, for one reason: the third
+# consumer is the seatbelt profile in ``exec.rs``, which is macOS-only and is
+# asserted entry-for-entry against ``OS_AUTOMATION_DIRS``
+# (``test_g2_the_fence_list_is_in_lockstep_with_the_shell``). Adding Windows rows
+# there would put paths no macOS kernel can reach into a macOS-only profile and
+# would turn a lockstep check into a subset check — weakening the one assertion
+# that keeps the two languages honest. The Windows fence has no shell-side half to
+# sync with, because there is no profile on Windows to put it in.
+#
+# `%SystemRoot%` and `%ProgramData%` RATHER THAN `C:\...`: the system drive is not
+# always `C:`, and `os.path.expandvars` expands `%NAME%` on Windows and leaves it
+# alone everywhere else — which is exactly the behaviour ``_expand_automation_dir``
+# turns into "this platform cannot place that directory".
+WINDOWS_AUTOMATION_DIRS = (
+    "~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
+    "%ProgramData%/Microsoft/Windows/Start Menu/Programs/StartUp",
+    "%SystemRoot%/System32/Tasks",
+    "%SystemRoot%/Tasks",
+)
+
 # The programs whose whole job is to ARM automation — hand work to the OS so it
 # runs later, on its own. Refused as a command's first word, on every platform and
 # in every mode: the seatbelt blocks ``launchctl``'s Mach traffic on macOS, and
 # nothing blocks ``crontab`` anywhere else, so this refusal cannot be
 # platform-conditional the way the CONTAINS direction is.
-_ARMING_BINARIES = ("launchctl", "crontab", "at", "batch")
+#
+# ``schtasks`` joins them for the Windows port: its whole job is handing work to
+# the Task Scheduler, exactly as ``crontab``'s is handing work to cron.
+#
+# WHAT WINDOWS CONCEDES, SPELLED OUT rather than left to be discovered, in the same
+# temperament as the concessions above. ``reg add HKCU\...\Run`` arms a program at
+# sign-in and is NOT refused, because refusing the program ``reg`` would refuse
+# every ``reg query`` — a false positive on ordinary work, which this section's own
+# doctrine says is what gets a guard switched off rather than fixed. Nor is
+# ``powershell -c Register-ScheduledTask``: the arming word is not the command's
+# first token, and chasing it means parsing PowerShell, which is the game §5.5 says
+# it does not play. Both are backstop misses, not floor holes — the registry Run
+# key is not a file any tool here can write, and the keyword gate still owns the
+# only path by which Addison ARMS anything.
+_ARMING_BINARIES = ("launchctl", "crontab", "at", "batch", "schtasks")
 
 # Words the shell drops before running what follows, so that ``<prefix> crontab -e``
 # runs crontab exactly as the bare spelling does. Stepping over these is the
@@ -430,11 +472,39 @@ _SEGMENT_SPLIT = re.compile(r"[;|&()\n\r]+")
 _PATHISH_PREFIXES = ("~", "$HOME", "${HOME}")
 
 
+def _expand_automation_dir(entry: str) -> str | None:
+    """One fence entry as an absolute path, or None where THIS platform has no such
+    place at all.
+
+    ``expanduser`` then ``expandvars``, because the two tuples spell their home
+    differently and both spellings have to survive: ``~`` on every platform,
+    ``%NAME%`` only on Windows (``os.path.expandvars`` leaves it untouched
+    elsewhere, by design).
+
+    NONE MEANS UNREACHABLE, AND ONLY THAT. An unexpanded ``%SystemRoot%/Tasks``
+    is a relative path, and a relative entry in this list would be resolved against
+    whatever directory the process happens to be in — so it would fence a folder
+    named ``%SystemRoot%`` under the cwd and fence the Task Scheduler nowhere. That
+    is worse than dropping it: it reads like coverage. Dropping is correct off
+    Windows, where the directory genuinely does not exist.
+
+    AND THE DROP IS NOT ALLOWED TO BE SILENT WHERE IT WOULD MATTER.
+    ``test_the_windows_fence_is_whole_on_windows`` asserts that on Windows every
+    ``WINDOWS_AUTOMATION_DIRS`` entry expands — a fence quietly shorter than it
+    reads is this repository's most-repeated bug, and the one case where that could
+    happen here is an environment variable Windows always sets going missing."""
+    expanded = os.path.expandvars(os.path.expanduser(entry))
+    return expanded if os.path.isabs(expanded) else None
+
+
 def _automation_roots() -> list[str]:
-    """``OS_AUTOMATION_DIRS``, home-expanded. Its own function because the CONTAINS
-    direction has to be able to tell this group apart from the rest of
-    ``denylisted_roots`` — see ``command_denied_path``."""
-    return [os.path.expanduser(d) for d in OS_AUTOMATION_DIRS]
+    """Both fence tuples, expanded, minus whatever this platform cannot place. Its
+    own function because the CONTAINS direction has to be able to tell this group
+    apart from the rest of ``denylisted_roots`` — see ``command_denied_path`` — and
+    because it is the ONE place the fence is expanded, which is what lets a second
+    tuple be added without a second spelling."""
+    expanded = (_expand_automation_dir(d) for d in OS_AUTOMATION_DIRS + WINDOWS_AUTOMATION_DIRS)
+    return [d for d in expanded if d is not None]
 
 
 def denylisted_roots(data_dir: str | os.PathLike[str]) -> list[str]:

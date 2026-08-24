@@ -279,7 +279,7 @@ class RoutinesMixin(ServerContext):
         # (screening.py says why the verdict parameter exists). Routine-file import
         # is the fifth origin of screened text alongside the web tools, the file
         # tools and MCP results, owner decision 2026-08-15, "import screens the
-        # picked file's text"; docs/untrusted-screening-plan.md owns the list.
+        # picked file's text"; docs/plans/untrusted-screening-plan.md owns the list.
         verdict = screen(_routine_screenable_text(routine))
         # The stored description is what a MODEL reads when the routine is later
         # run or described, so that is the copy the note goes in front of. It is

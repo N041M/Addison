@@ -49,7 +49,7 @@ it as information. The person sees one sentence when it happens, and the audit r
 records which kinds were recognised. It is a pattern layer and a backstop: writing
 in a shape nobody listed passes untouched, and the permission gate is still the
 only thing that decides what may run.
-[docs/untrusted-screening-plan.md](docs/untrusted-screening-plan.md) owns it.
+[docs/plans/untrusted-screening-plan.md](docs/plans/untrusted-screening-plan.md) owns it.
 
 **The context budget manager, built 2026-08-14.** A chat that gets close to what
 the answering model can hold is condensed at the end of a turn: Addison summarises
@@ -67,7 +67,7 @@ says so where you can see it later: a marker at the top of the thread, drawn fro
 the stored row rather than from the note, and one entry in the history list with
 the earlier part under it. **One limit is still real**: the summary call's tokens
 are not in the cost views, so a long chat costs a little more than they say.
-[docs/context-budget-plan.md](docs/context-budget-plan.md) owns it, and
+[docs/plans/context-budget-plan.md](docs/plans/context-budget-plan.md) owns it, and
 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) tracks that limit.
 
 **Sharing a routine, built 2026-08-15.** A routine can be saved as a file and sent
@@ -87,7 +87,7 @@ reworded on the way, a chain across two routines, and contents somebody pasted i
 hand produce no line; wording shaped as ordinary prose is not flagged; and a plan
 whose danger is entirely in the values it substitutes looks unremarkable at the
 moment you add it. The run card, which shows those values, is the control.
-[docs/routine-sharing-plan.md](docs/routine-sharing-plan.md) owns it, and
+[docs/plans/routine-sharing-plan.md](docs/plans/routine-sharing-plan.md) owns it, and
 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) tracks what remains uncaught.
 
 ## Next
@@ -106,12 +106,12 @@ the surface is COMPLETE PENDING ITS MANUAL PASS: what is left is
 [docs/TESTING-CHECKLIST.md](docs/TESTING-CHECKLIST.md) §13c, which is the only place the
 widened content-security policy is enforced by a real webview, on all three platforms.
 See the note further down and
-[docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md).
+[docs/plans/phase-3-review-surface-plan.md](docs/plans/phase-3-review-surface-plan.md).
 
 **Built 2026-08-22, beside those tracks: messaging channels — controlling
 Addison from a phone.** The owner asked for it, the design was written and its
 eleven decisions answered the same day
-([docs/messaging-channel-plan.md](docs/messaging-channel-plan.md) owns all of it).
+([docs/plans/messaging-channel-plan.md](docs/plans/messaging-channel-plan.md) owns all of it).
 What ships is phases 1–3 of that plan: channel configuration with the token in the
 keychain and nothing connecting; then Telegram connected, a phone paired with a
 code Addison shows on the desktop, and conversation with **no tools at all**; then
@@ -167,6 +167,20 @@ still the default, or answer it late — choosing the wider one is Developer-onl
 **Phase 4 — approving an action from a phone — stays deferred**, the owner's horizon
 for that being a bespoke phone app.
 
+**Built 2026-08-23, beside those tracks: phase 1 of the Windows port.** The tree
+compiles for `x86_64-pc-windows-msvc` and passes `clippy -D warnings` there; the
+Rust shell grew one platform seam in `exec.rs` (`cmd.exe /C`, a Job Object where
+Unix uses a process group, `PeekNamedPipe` where Unix uses a non-blocking
+descriptor); the G2 fence gained its Windows half, which had been a real hole (the
+Startup folders were trustable and writable behind an ordinary card); two floor
+repairs landed in `filesystem.rs`; and CI grew two Windows jobs.
+**Nothing in it has run on Windows.** Three owner decisions of the same day set the
+shape: `run_command` degrades honestly there as it already does on Linux, the fence
+ships now and Task Scheduler arming does not, and Addison's data stays at
+`~/.addison`. [docs/plans/windows-port-plan.md](docs/plans/windows-port-plan.md) owns all of it,
+including the numbered list of what is owed — starting with the first run of those
+two jobs and the manual pass behind it.
+
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
 2026-08-07 and step 8 until the following morning; all are finished. Their entries
 stay below, in place, because they are recent enough that people still ask what
@@ -179,7 +193,7 @@ they covered.
    same folders you have trusted; a short list of things that cannot be approved at
    all; stripping of anything that looks like a password or key out of command
    output before a model sees it; and a record of what ran. Plan:
-   [docs/step-5.5-containment-plan.md](docs/step-5.5-containment-plan.md).
+   [docs/plans/step-5.5-containment-plan.md](docs/plans/step-5.5-containment-plan.md).
 
    **The sandbox and the short list are built; the restore guarantee holds again
    in Developer mode.** Commands no longer run inside Addison's own engine — they
@@ -215,7 +229,7 @@ they covered.
    of v1 that is missing.** Consume external tools through the registry and the
    permission gate that already exist. Addison is a client here, never a server.
    The five phases and what each one covers are in
-   [docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md).
+   [docs/plans/step-7-mcp-plan.md](docs/plans/step-7-mcp-plan.md).
 
    **What the fifth phase holds, and why it is not v1:** talking to servers that
    run as a program rather than at a web address, which needs containment nobody
@@ -282,7 +296,7 @@ they covered.
    minted fresh for each arming — decided 2026-08-07, and what made a fixed prefix
    the wrong answer is that anything able to write English could tell you to type
    one. The four phases and the decisions around them are in
-   [docs/step-8-automation-plan.md](docs/step-8-automation-plan.md).
+   [docs/plans/step-8-automation-plan.md](docs/plans/step-8-automation-plan.md).
 
    **What phase 1 shipped (2026-08-07):** the fence and the table, with the gate
    and everything that can arm still to come. Before this, a folder like the one
@@ -338,7 +352,7 @@ After that comes Phase 3: packaging, signing, notarisation, the auto updater, go
 back to a previous app binary, and Secure Enclave identity. `updater.rs` is a nine
 line stub today. **Phase 3 also carries a second track**, added to it on 2026-07-25 —
 the Developer review surface in
-[docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md). It waited
+[docs/plans/phase-3-review-surface-plan.md](docs/plans/phase-3-review-surface-plan.md). It waited
 on steps 6, 7 and 8, and all three landed on 2026-08-06 and 2026-08-07; the three
 fixes the plan asked for first closed on 2026-08-08, each in its own change. **Built,
 start to finish, the same day**: Build §1 (the read paths — `workspace.listDirectory` /
@@ -390,7 +404,7 @@ Not because they are hard. They were looked at and put down on purpose.
   Isolating *foreign code* is also
   a separate and live question — it is what a stdio MCP server would need, and it
   is why v1 talks to tool servers over the web instead
-  ([docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md) owns that decision).
+  ([docs/plans/step-7-mcp-plan.md](docs/plans/step-7-mcp-plan.md) owns that decision).
 
 Addison also does not schedule itself, and that is not a gap. It is one of the four
 guarantees in the [README](README.md).

@@ -2,7 +2,7 @@
 
 ================================ SAFETY FRAME ================================
 **This is the keyword gate** (GLOBAL FLOOR G2; step 8 phase 3,
-[docs/step-8-automation-plan.md](../docs/step-8-automation-plan.md) §3, which owns
+[docs/plans/step-8-automation-plan.md](../docs/plans/step-8-automation-plan.md) §3, which owns
 the decision). Arming an automation hands a command to the operating system to run
 on its own schedule, when Addison is closed and outside Addison's sandbox. That is
 the one effect in this app no ordinary permission card is strong enough to sell, so

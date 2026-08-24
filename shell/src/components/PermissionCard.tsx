@@ -19,7 +19,7 @@
 // When `request.arming` is present this card is the one place in the app where a
 // person hands a command to the OPERATING SYSTEM to run on its own schedule, when
 // Addison is closed and outside Addison's sandbox. Everything different about it
-// follows from one sentence in docs/step-8-automation-plan.md §3: the code exists
+// follows from one sentence in docs/plans/step-8-automation-plan.md §3: the code exists
 // to make somebody READ the preview they are copying from, and "the preview is the
 // defence" against the one attack the code cannot stop — a person who types it for
 // a job they never understood.

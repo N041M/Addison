@@ -28,7 +28,7 @@ takes ``_request_arming`` and nothing else: no auto-grant, no session grant, no
 trust suppression, no guard. The card carries a short code the person retypes
 (``agent_core/automation_nonce.py``), which the CALLER mints, holds and compares —
 this module never sees a nonce, and neither does any tool. See
-``docs/step-8-automation-plan.md`` §3 and §5.9 (the nonce ships non-tunable).
+``docs/plans/step-8-automation-plan.md`` §3 and §5.9 (the nonce ships non-tunable).
 """
 
 from __future__ import annotations
