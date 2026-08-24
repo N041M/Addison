@@ -1120,8 +1120,11 @@ follows. None is scheduled and none blocks anything.
     that stops mid-sentence shows that by itself, and a second rail-and-label
     annotation would compete with the free-model chip on exactly the messages
     likeliest to carry both.
-- **Knowledge: retrieval over person-attached files. v2. Its screening
-  prerequisite is now met** (screening shipped 2026-08-13,
+- **Knowledge: retrieval over person-attached files. DECIDED, AND PHASE 1 BUILT
+  2026-08-24** ([knowledge-retrieval-plan.md](plans/knowledge-retrieval-plan.md) owns
+  the design, the four answered owner decisions and the two phases still to build;
+  what follows is why it was queued). **Its screening
+  prerequisite was met** (screening shipped 2026-08-13,
   [untrusted-screening-plan.md](plans/untrusted-screening-plan.md)), **with one thing to
   settle when this is built**: retrieved passages are local file content, and
   decision 5 of that day says local file reads are not screened for now. A
@@ -1139,6 +1142,13 @@ follows. None is scheduled and none blocks anything.
   One structural note so it is not rediscovered: a retrieval TOOL must not import
   `providers/` (module boundary rule), so indexing belongs to an
   orchestrator-owned service and the tool only queries the index it left behind.
+  **That is what the built split is** — `knowledge/index.py` is provider-free and is
+  what a tool may import, `knowledge/indexer.py` is orchestrator-owned and may not be
+  imported by one, and an AST test walks the transitive import graph rather than
+  checking the first hop. **The screening question above is ANSWERED: at index time,
+  once per chunk, verdict stored** — which is also the only moment a person can be
+  told a document contains instruction-shaped writing while they can still decline
+  to add it.
 - **Per-task model assignment: Developer-only, not v1 (owner, 2026-08-09).** The
   raw suggestion was "models casually on the sidebar"; rejected for Simple (model
   choice is a power-user surface, design-doc §7.3.3, and the companion keeps its

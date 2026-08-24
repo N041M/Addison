@@ -705,6 +705,38 @@ erDiagram
         TEXT server_detail "what the SERVER said; the diagnostic one"
         INTEGER created_at
     }
+    knowledge_documents {
+        TEXT id PK
+        TEXT path "absolute, as picked; Addison never walks a folder"
+        TEXT display_name "the file name by default; theirs to change"
+        TEXT sha256 "digest of the bytes that were INDEXED"
+        INTEGER byte_size
+        TEXT status "pending indexed failed"
+        TEXT detail "the plain sentence when status is failed"
+        INTEGER chunk_count
+        INTEGER flagged_chunks "a COUNT; never the matched text"
+        INTEGER added_at
+        INTEGER indexed_at "NULL until the first index finishes"
+    }
+    knowledge_documents ||--o{ knowledge_chunks : holds
+    knowledge_chunks {
+        TEXT id PK
+        TEXT document_id FK
+        INTEGER ordinal
+        TEXT text
+        INTEGER char_start "offset into the document text as read"
+        INTEGER char_end
+        INTEGER flagged "screening's verdict, taken once at index time"
+        TEXT screened_kinds "rule names, comma separated; never the text"
+    }
+    knowledge_chunks ||--o{ knowledge_embeddings : embedded_as
+    knowledge_embeddings {
+        TEXT chunk_id PK
+        TEXT model PK "one vector per chunk per embedding model"
+        INTEGER dim
+        BLOB vector "little-endian float32, dim floats long"
+        INTEGER created_at
+    }
 ```
 
 - **usage_log**: the §4.8 usage substrate. One row per provider call that reported

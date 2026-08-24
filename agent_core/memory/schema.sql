@@ -699,3 +699,77 @@ CREATE TABLE IF NOT EXISTS provider_attempts (
 );
 CREATE INDEX IF NOT EXISTS idx_provider_attempts_created
     ON provider_attempts(created_at);
+
+-- ===========================================================================
+-- Knowledge: retrieval over documents a person attached
+-- (plans/knowledge-retrieval-plan.md, phase 1).
+--
+-- THREE TABLES AND NOT ONE, because the embedding model is allowed to change
+-- without re-reading the file: re-embedding replaces `knowledge_embeddings` and
+-- leaves the text and its offsets exactly where they were.
+--
+-- ALL THREE ARE EXCLUDED FROM SNAPSHOTS (owner decision 4, 2026-08-24), on the
+-- `tool_grants` precedent: a restore that put a document back would undo a
+-- removal somebody performed, through the deliberately ungated one-action
+-- restore. Losing an index costs a re-index.
+-- ===========================================================================
+
+-- One attached document. A row exists because a person picked the file.
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id              TEXT PRIMARY KEY,
+    -- Absolute path as picked. Addison never walks a folder looking for things
+    -- to index, so this is always a path somebody chose.
+    path            TEXT NOT NULL UNIQUE,
+    -- What the person sees. The file name by default; theirs to change later.
+    display_name    TEXT NOT NULL,
+    -- The digest of the bytes that were INDEXED, which is what makes "this file
+    -- changed on disk" answerable against the shell's own digest call.
+    sha256          TEXT NOT NULL,
+    byte_size       INTEGER NOT NULL,
+    -- pending  = registered, not yet indexed (or re-indexing)
+    -- indexed  = chunks and vectors are present and match `sha256`
+    -- failed   = the last attempt did not finish; `detail` says so plainly
+    status          TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending','indexed','failed')),
+    -- The plain sentence shown when `status` is 'failed'. Redacted on write.
+    detail          TEXT,
+    chunk_count     INTEGER NOT NULL DEFAULT 0,
+    -- How many of those chunks screening flagged. A COUNT and never the text:
+    -- quoting an injection into a row reproduces the payload somewhere else
+    -- (screening.py owns that rule).
+    flagged_chunks  INTEGER NOT NULL DEFAULT 0,
+    added_at        INTEGER NOT NULL,
+    indexed_at      INTEGER
+);
+
+-- One passage. `char_start`/`char_end` are offsets into the document's text as
+-- it was read, so a retrieved passage can say WHERE it came from and not merely
+-- which file.
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+    id              TEXT PRIMARY KEY,
+    document_id     TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+    ordinal         INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    char_start      INTEGER NOT NULL,
+    char_end        INTEGER NOT NULL,
+    -- Screening's verdict, taken ONCE at index time (owner decision 1,
+    -- 2026-08-24) and carried wherever this chunk is later retrieved.
+    -- `screened_kinds` is a comma-separated list of RULE NAMES and never the
+    -- matched text, for the reason `ScreeningResult` gives.
+    flagged         INTEGER NOT NULL DEFAULT 0 CHECK(flagged IN (0,1)),
+    screened_kinds  TEXT,
+    UNIQUE(document_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document
+    ON knowledge_chunks(document_id);
+
+-- One vector per chunk per embedding model. `vector` is little-endian float32,
+-- `dim` floats long — see `knowledge/index.py`, which owns the encoding.
+CREATE TABLE IF NOT EXISTS knowledge_embeddings (
+    chunk_id        TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+    model           TEXT NOT NULL,
+    dim             INTEGER NOT NULL,
+    vector          BLOB NOT NULL,
+    created_at      INTEGER NOT NULL,
+    PRIMARY KEY (chunk_id, model)
+);
