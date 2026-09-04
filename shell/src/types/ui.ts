@@ -683,6 +683,52 @@ export interface McpServer {
 }
 
 // ---------------------------------------------------------------------------
+// Your documents — the knowledge base (knowledge retrieval, phase 3 of three).
+// A row describes one document the person picked: what it is called, where it
+// lives, how far the indexing got, and whether the file on disk still matches
+// what Addison read. It never carries the document's text or its digest.
+// ---------------------------------------------------------------------------
+
+/** How far indexing got. `pending` means Addison has the row and not the index —
+ * a real state after an interrupted add, and the honest fallback for anything
+ * this side does not recognise (a page about somebody's documents must never
+ * claim one is ready to search when it does not know). */
+export type KnowledgeDocumentStatus = "pending" | "indexed" | "failed";
+
+/** What the file on disk is doing, computed while `knowledge.list` is answered
+ * and never stored. "unknown" is the answer whenever nothing could be compared —
+ * no shell bridge (the CLI, the tests), or a digest the shell could not take —
+ * and it must read as "Addison hasn't checked", never as "the file is gone". */
+export type KnowledgeDocumentOnDisk = "same" | "changed" | "missing" | "unknown";
+
+export interface KnowledgeDocument {
+  /** The core's row id — what `knowledge.reindex` and `knowledge.remove` take. */
+  id: string;
+  /** The file's name, as it was picked. What the person recognises the row by. */
+  displayName: string;
+  /** The absolute path, as it was picked. Shown under the name in the machine-fact
+   * mono, because two files called "Notes.txt" are told apart by nothing else. */
+  path: string;
+  status: KnowledgeDocumentStatus;
+  /** Why indexing failed, in the core's own plain sentence. Null on every other
+   * status; never a stack trace, and never this side's guess. */
+  detail: string | null;
+  /** How many passages the index holds for this document. */
+  chunkCount: number;
+  /** How many of those the screening layer marked as instruction-shaped writing.
+   * A count the person is told about, because a document that argues with Addison
+   * is something they may want to know they added (untrusted screening, 2026-08-13). */
+  flaggedChunks: number;
+  /** The size of what was read, in bytes. */
+  byteSize: number;
+  /** Unix seconds when the document was added. */
+  addedAt: number;
+  /** Unix seconds of the last successful index, or null when there has not been one. */
+  indexedAt: number | null;
+  onDisk: KnowledgeDocumentOnDisk;
+}
+
+// ---------------------------------------------------------------------------
 // Messaging channels (phase 1) — the phone connections a person can save.
 // Configuration only: nothing in this build connects, polls or pairs.
 // ---------------------------------------------------------------------------

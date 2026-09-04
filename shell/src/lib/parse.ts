@@ -11,7 +11,13 @@
 // Type-only import: erased at build, so this file keeps its runtime
 // dependency-free stance (types/ui.ts still imports `asRecord` from here at
 // runtime; nothing flows back the other way once the types are stripped).
-import type { ArtifactUnavailable, ProfileState } from "../types/ui";
+import type {
+  ArtifactUnavailable,
+  KnowledgeDocument,
+  KnowledgeDocumentOnDisk,
+  KnowledgeDocumentStatus,
+  ProfileState,
+} from "../types/ui";
 
 /** Narrow an unknown value to a plain record, or null if it isn't an object. */
 export function asRecord(value: unknown): Record<string, unknown> | null {
@@ -107,4 +113,126 @@ export function normalizeVariables(raw: unknown): RoutineVariable[] {
       },
     ];
   });
+}
+
+// ---------------------------------------------------------------------------
+// Your documents — the knowledge base's rows (knowledge retrieval, phase 3).
+//
+// Defensive in the same way `parseMcpServers` is, and failing in the same
+// direction: every unrecognised field lands on "Addison hasn't got that far",
+// never on a claim that a document is indexed and searchable. The page exists so
+// a person can see what Addison has read; overstating there is the one way for it
+// to be useless.
+// ---------------------------------------------------------------------------
+
+/** The three states a row may arrive in — the whole of `KnowledgeDocumentStatus`.
+ * Anything else becomes "pending", which reads as "Addison hasn't finished
+ * reading this" and offers Try again. Falling back to "indexed" would put "Ready.
+ * 3 passages." under a document nothing can search. */
+const KNOWLEDGE_STATUSES = new Set<string>(["pending", "indexed", "failed"]);
+
+/** The four on-disk answers, whole. Anything else becomes "unknown" — the value
+ * the core itself sends when it could not compare (no shell bridge, or no digest),
+ * and the only one that claims nothing. "missing" would tell somebody their file
+ * had gone; "changed" would send them to a picker for no reason. */
+const KNOWLEDGE_ON_DISK = new Set<string>(["same", "changed", "missing", "unknown"]);
+
+/** A count that is a real, non-negative number, or 0. A junk count must not become
+ * "Ready. NaN passages." on a row somebody is reading. */
+function knowledgeCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+/** One `knowledge.list` row, or `null` when it isn't usable.
+ *
+ * Fails CLOSED on `parseMcpServerRow`'s reasoning for the two fields a row cannot
+ * work without: no id means Remove and Update would have nothing to send, and no
+ * name means a row whose Remove button is a mystery.
+ *
+ * It does NOT drop a row for a missing `path`, which is where it parts company
+ * with the MCP parser. There, the address is a claim about what Addison reaches,
+ * so a bad one is worth losing the row over. Here the path is only where the
+ * person's own file sits — and a dropped row is an indexed document that goes on
+ * answering questions while the one page that could remove it pretends it does not
+ * exist. The row renders without its path instead.
+ */
+function parseKnowledgeDocumentRow(value: unknown): KnowledgeDocument | null {
+  const row = asRecord(value);
+  if (!row || typeof row.id !== "string" || !row.id) return null;
+  if (typeof row.displayName !== "string" || !row.displayName) return null;
+  const status =
+    typeof row.status === "string" && KNOWLEDGE_STATUSES.has(row.status)
+      ? (row.status as KnowledgeDocumentStatus)
+      : "pending";
+  const onDisk =
+    typeof row.onDisk === "string" && KNOWLEDGE_ON_DISK.has(row.onDisk)
+      ? (row.onDisk as KnowledgeDocumentOnDisk)
+      : "unknown";
+  return {
+    id: row.id,
+    displayName: row.displayName,
+    path: typeof row.path === "string" ? row.path : "",
+    status,
+    // The sentence rides only on the row it explains. A `detail` left on an
+    // indexed row by an older core would otherwise print a past failure under a
+    // document that is working.
+    detail: status === "failed" && typeof row.detail === "string" ? row.detail : null,
+    chunkCount: knowledgeCount(row.chunkCount),
+    flaggedChunks: knowledgeCount(row.flaggedChunks),
+    byteSize: knowledgeCount(row.byteSize),
+    addedAt: knowledgeCount(row.addedAt),
+    indexedAt:
+      typeof row.indexedAt === "number" && Number.isFinite(row.indexedAt) ? row.indexedAt : null,
+    onDisk,
+  };
+}
+
+/** Parse `knowledge.list` → the documents Addison has been given, newest first
+ * (the core's order, which this side never re-sorts). Unusable rows are dropped;
+ * junk never throws. */
+export function parseKnowledgeDocuments(result: unknown): KnowledgeDocument[] {
+  const obj = asRecord(result);
+  const list = obj && Array.isArray(obj.documents) ? (obj.documents as unknown[]) : [];
+  const out: KnowledgeDocument[] = [];
+  for (const item of list) {
+    const row = parseKnowledgeDocumentRow(item);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+/** `knowledge.add` / `knowledge.reindex` / `knowledge.remove` → what happened.
+ *
+ * THREE OUTCOMES, and the third is why this is not the mcp mutation shape.
+ * `ok:true` means it landed (add and reindex carry the row they wrote).
+ * `ok:false` with `error` is a refusal in the core's own plain sentence, which the
+ * panel prints verbatim. `ok:false` with `cancelled` is the person closing the
+ * file picker — not a failure, not an error line, and nothing to say about it at
+ * all; flattening it into the refusal branch would answer a deliberate "never
+ * mind" with a sentence explaining what went wrong.
+ *
+ * An `ok:true` whose row is unusable keeps its `ok` and simply carries no
+ * document: every caller re-reads the list afterwards, so the truth arrives a
+ * moment later either way, and degrading to a failure would print an error about
+ * something that worked. */
+export interface KnowledgeMutationResult {
+  ok: boolean;
+  document?: KnowledgeDocument;
+  cancelled?: boolean;
+  error?: string;
+}
+
+export function parseKnowledgeMutation(result: unknown): KnowledgeMutationResult {
+  const obj = asRecord(result);
+  if (obj?.ok === true) {
+    const document = parseKnowledgeDocumentRow(obj.document);
+    return document ? { ok: true, document } : { ok: true };
+  }
+  return {
+    ok: false,
+    // Only ever true on a refusal, and only when the core says so — a missing
+    // field means an ordinary refusal, which does get its line.
+    cancelled: obj?.cancelled === true ? true : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
 }
