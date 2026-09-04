@@ -25,9 +25,10 @@
 // Removing is a two-press confirm on the row (the SkillsSection idiom) plus one
 // sentence, because there IS a consequence to explain here that the tool servers
 // do not have: the knowledge tables are excluded from restore points, so this is
-// the rare removal a restore cannot undo.
+// the rare removal a restore cannot undo. The arming is dropped as soon as
+// anything else happens on the panel — see `confirmingRemove` below.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { KnowledgeCardState } from "../hooks/useKnowledge";
 import type { KnowledgeDocument } from "../types/ui";
 import { RowAction, SurfaceRow } from "./Surface";
@@ -69,6 +70,14 @@ const REMOVAL_IS_PERMANENT =
 /** What a row says about itself, under its path. Exactly one sentence per state,
  * chosen from what the core sent and never from a guess. */
 export function knowledgeStatusLine(doc: KnowledgeDocument): string {
+  // A FILE THAT IS GONE OUTRANKS EVERY OTHER STATE, whatever the last read did.
+  // `onDisk` is computed while the list is answered and the status is whatever
+  // the last read wrote, so "missing" is always the newer of the two facts: a
+  // row that printed its old failure sentence over it would offer a way back
+  // that leads to a file Addison already knows is not there. `reindexLabel`
+  // agrees, and the two must be read together — a sentence saying the file is
+  // gone beside a "Try again" button is the panel disagreeing with itself.
+  if (doc.onDisk === "missing") return "Addison can't find this file any more.";
   if (doc.status === "failed") {
     // The core's own words, verbatim. The fallback is for a failed row that
     // arrived without them — rare, and still better than a silent row with a
@@ -77,7 +86,6 @@ export function knowledgeStatusLine(doc: KnowledgeDocument): string {
   }
   if (doc.status === "pending") return "Addison hasn't finished reading this.";
   if (doc.onDisk === "changed") return "This file has changed since Addison read it.";
-  if (doc.onDisk === "missing") return "Addison can't find this file any more.";
   const ready =
     doc.chunkCount === 1 ? "Ready. 1 passage." : `Ready. ${doc.chunkCount} passages.`;
   // Said only when there is something to say. The screening layer marks writing
@@ -105,9 +113,14 @@ export function knowledgeStatusLine(doc: KnowledgeDocument): string {
 /** The row's re-read control, or null when there is nothing to re-read. Both
  * labels send the same `knowledge.reindex`; what differs is what the person is
  * being offered — a file that moved on is UPDATED, a read that failed is TRIED
- * AGAIN, and a file Addison cannot find gets neither, because opening a picker
- * on a file that is not there would be an errand with no end. */
+ * AGAIN, and a file Addison cannot find gets neither IN ANY STATUS, because
+ * opening a picker on a file that is not there would be an errand with no end. */
 function reindexLabel(doc: KnowledgeDocument): string | null {
+  // Missing is asked FIRST, for the reason the sentence asks it first: a failed
+  // or unfinished read whose file has since gone still has nothing to re-read.
+  // Asking `status` first is the mutation this order exists to refuse — it put
+  // "Try again" under "Addison can't find this file any more."
+  if (doc.onDisk === "missing") return null;
   if (doc.status === "failed" || doc.status === "pending") return "Try again";
   if (doc.onDisk === "changed") return "Update";
   return null;
@@ -127,6 +140,22 @@ export function KnowledgePanel({
   // skills and tool-server rows use; never a browser confirm().
   const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
 
+  // AN ARMED REMOVE BELONGS TO ONE LIST, AND A NEW LIST IS NOT IT. Every answer
+  // to `knowledge.list` is freshly parsed, so a new array identity here means the
+  // rows were read again — after an add, after a re-read, after a removal, or on
+  // a core "ready" nobody pressed anything for. The arming does not survive that:
+  // the person aimed at a row in the list in front of them, and the next single
+  // click must not be a permanent delete of whatever now sits in its place.
+  //
+  // BOTH halves are needed, and neither covers the other. This effect catches
+  // refreshes the panel never sees the start of; the handlers below disarm at the
+  // press, because a re-read's answer is a modal picker and a local embedding
+  // pass away — a minute, by the panel's own busy line — and it never arrives at
+  // all if the list read that follows fails and keeps the array it had.
+  useEffect(() => {
+    setConfirmingRemove(null);
+  }, [documents]);
+
   if (!connected) {
     return <SurfaceRow wrap name={NOT_CONNECTED_LINE} />;
   }
@@ -134,6 +163,11 @@ export function KnowledgePanel({
   function add() {
     setConfirmingRemove(null);
     void handleAdd();
+  }
+
+  function startReindex(doc: KnowledgeDocument) {
+    setConfirmingRemove(null);
+    void handleReindex(doc.id);
   }
 
   function remove(doc: KnowledgeDocument) {
@@ -184,7 +218,7 @@ export function KnowledgePanel({
                 <>
                   {reindex && (
                     <RowAction
-                      onClick={() => void handleReindex(doc.id)}
+                      onClick={() => startReindex(doc)}
                       disabled={busy}
                       // A column of identical "Update" buttons is the shape in
                       // which somebody updates the wrong document.
