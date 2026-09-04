@@ -38,6 +38,7 @@ import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { GuardsCardState } from "../hooks/useGuards";
 import type { RoutingCardState } from "../hooks/useRouting";
 import type { WorkspaceCardState } from "../hooks/useWorkspace";
+import type { KnowledgeCardState } from "../hooks/useKnowledge";
 import type { McpServersCardState } from "../hooks/useMcpServers";
 import type { ChannelsCardState } from "../hooks/useChannels";
 import type { AutomationsCardState } from "../hooks/useAutomations";
@@ -54,6 +55,7 @@ import {
 } from "./Surface";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { SkillsSection } from "./SkillsSection";
+import { KnowledgePanel } from "./KnowledgePanel";
 import { RestorePointsSection } from "./SnapshotsCard";
 import { CustomGuardPanel } from "./CustomGuardPanel";
 import { WorkspaceTrustPanel } from "./WorkspaceTrustPanel";
@@ -77,6 +79,13 @@ interface Props {
   models: ModelSelection;
   /** The skills bundle (useSkills): the list + create/edit/toggle/remove handlers. */
   skills: SkillsState;
+  /** The knowledge bundle (useKnowledge; knowledge retrieval, phase 3 of three).
+   * Optional so a partial caller (older tests) still renders — the section is
+   * simply omitted then. UNLIKE "Tool servers" and "Your phone" it has NO profile
+   * gate: the search tool is LOW and read-only and both profiles have it (owner
+   * decision 2, 2026-08-24), so Simple sees this section, adds documents, and
+   * removes them exactly as Developer does. */
+  knowledge?: KnowledgeCardState;
   /** The restore-points bundle (useSnapshots) — the G3 floor's Settings face. */
   snapshots: SnapshotsState;
   /** The Custom-profile guard bundle (useGuards). Its section renders only while
@@ -249,6 +258,7 @@ export function SettingsPage({
   pinned,
   models,
   skills,
+  knowledge,
   snapshots,
   guards,
   routing,
@@ -346,6 +356,20 @@ export function SettingsPage({
       <SurfaceSection label="Skills">
         <SkillsSection connected={connected} skills={skills} />
       </SurfaceSection>
+
+      {/* Your documents — the knowledge base (knowledge retrieval, phase 3 of
+          three). It sits next to Skills because the two are the same kind of
+          thing to the person using them: what Addison knows about how you like
+          things done, and what Addison has read. There is NO profile gate — the
+          search tool is LOW and read-only, so the companion has it too (owner
+          decision 2, 2026-08-24), and the search tool's own empty-handed sentence
+          points here by name ("Add one in Settings, under Your documents"), which
+          would be an instruction to a section that was not there. */}
+      {knowledge && (
+        <SurfaceSection label="Your documents">
+          <KnowledgePanel connected={connected} knowledge={knowledge} />
+        </SurfaceSection>
+      )}
 
       <SurfaceSection label="Profile">
         <ProfileCard

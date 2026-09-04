@@ -85,6 +85,7 @@ import { useGuards } from "./hooks/useGuards";
 import { useRouting } from "./hooks/useRouting";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useCodeReview } from "./hooks/useCodeReview";
+import { useKnowledge } from "./hooks/useKnowledge";
 import { useMcpServers } from "./hooks/useMcpServers";
 import { useChannels } from "./hooks/useChannels";
 import { usePendingConsentResync } from "./hooks/usePendingConsentResync";
@@ -332,6 +333,14 @@ export function App() {
   // Developer/Custom gate as workspace trust, applied in SettingsPage. Adding one
   // saves an address and nothing else — there is no MCP client yet.
   const mcpState = useMcpServers({ connected });
+  // The knowledge base — the documents a person has given Addison to search
+  // (knowledge retrieval, phase 3 of three). NO profile gate, unlike the two
+  // hooks around it: the search tool is LOW and read-only, so Simple has the
+  // section too (owner decision 2, 2026-08-24). It is deliberately ABSENT from
+  // the restore closure above, and that is not an oversight — the three knowledge
+  // tables are excluded from restore points (owner decision 4), so a restore
+  // cannot add or remove a document underneath an open Settings page.
+  const knowledgeState = useKnowledge({ connected });
   // The saved automations — what Addison has written down for the OS to run
   // (Phase-2 step 8, phase 4 of four). Owned here rather than by the
   // Settings section because `automations` is a SNAPSHOT-CAPTURED table: a G3
@@ -1359,6 +1368,7 @@ export function App() {
                 pinned={surfacePinned}
                 models={models}
                 skills={skillsState}
+                knowledge={knowledgeState}
                 snapshots={snapshotsState}
                 guards={guardsState}
                 routing={routingState}
