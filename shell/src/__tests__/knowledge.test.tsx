@@ -35,6 +35,7 @@ import {
   waitFor,
   renderHook,
   act,
+  within,
 } from "@testing-library/react";
 import { parseKnowledgeDocuments, parseKnowledgeMutation } from "../lib/parse";
 import { KnowledgePanel } from "../components/KnowledgePanel";
@@ -70,6 +71,17 @@ const NO_LOCAL_MODEL =
 
 const NAME = "Tenancy agreement.md";
 const PATH = "/Users/mira/Documents/Tenancy agreement.md";
+/** A second and a third document, so a row's own sentence can be told from a
+ * neighbour's. Different names AND different paths: a test that reused either
+ * could not see a row printing the wrong one. */
+const NOTES = "Notes.txt";
+const NOTES_PATH = "/Users/mira/Notes.txt";
+const LEASE = "Old lease.md";
+const LEASE_PATH = "/Users/mira/Archive/Old lease.md";
+/** The sentence beside the second press of Remove. */
+const REMOVAL_IS_PERMANENT =
+  "Removing a document is permanent — a restore point won't bring it back. The file on " +
+  "your computer is left alone.";
 
 /** A row in the shape the parser produces, so a test can vary one field. */
 function doc(over: Partial<KnowledgeDocument> = {}): KnowledgeDocument {
@@ -250,7 +262,23 @@ function stateWith(over: Partial<KnowledgeCardState> = {}): KnowledgeCardState {
 }
 
 function renderPanel(state: KnowledgeCardState) {
-  render(<KnowledgePanel connected={true} knowledge={state} />);
+  return render(<KnowledgePanel connected={true} knowledge={state} />);
+}
+
+/**
+ * The ROW a named document owns, found from the one control every row has.
+ * `SurfaceRow`'s root is the hairline-separated `border-t` block, and it holds
+ * the name, the path, the status sentence and both controls — so an assertion
+ * scoped to it is an assertion about ONE document. A whole-page `getByText`
+ * cannot tell that apart: a sentence rendered from the wrong row is still on the
+ * page, and this panel's rule is that a row never claims more than the core said
+ * about THAT document.
+ */
+function rowFor(displayName: string): HTMLElement {
+  const control = screen.getByRole("button", { name: `Remove ${displayName}` });
+  const row = control.closest("div.border-t");
+  if (!row) throw new Error(`no row around the Remove control for ${displayName}`);
+  return row as HTMLElement;
 }
 
 describe("the documents panel", () => {
@@ -349,6 +377,41 @@ describe("the documents panel", () => {
     expect(screen.getByRole("button", { name: `Remove ${NAME}` })).toBeTruthy();
   });
 
+  it("says a failed document's file is gone, and offers only Remove", () => {
+    // Mutation: ask `status` before `onDisk` in either knowledgeStatusLine or
+    // reindexLabel. The row then prints the old failure and offers "Try again" —
+    // a picker pointed at a file the panel already knows is not there, which is
+    // the errand with no end the comment beside reindexLabel promises nobody gets
+    // sent on. The two facts have different ages: the failure is what the last
+    // read wrote, and "missing" was computed while THIS list was answered.
+    renderPanel(
+      stateWith({
+        documents: [
+          doc({ status: "failed", detail: NO_LOCAL_MODEL, chunkCount: 0, onDisk: "missing" }),
+        ],
+      }),
+    );
+    expect(screen.getByText("Addison can't find this file any more.")).toBeTruthy();
+    expect(screen.queryByText(NO_LOCAL_MODEL)).toBeNull();
+    expect(screen.queryByRole("button", { name: `Try again ${NAME}` })).toBeNull();
+    expect(screen.queryByRole("button", { name: `Update ${NAME}` })).toBeNull();
+    expect(screen.getByRole("button", { name: `Remove ${NAME}` })).toBeTruthy();
+  });
+
+  it("says an unfinished document's file is gone, and offers only Remove", () => {
+    // Same order, the other status. A pending row is the one that most invites a
+    // "Try again", and a pending row whose file has gone is exactly the one where
+    // pressing it could not finish.
+    renderPanel(
+      stateWith({ documents: [doc({ status: "pending", chunkCount: 0, onDisk: "missing" })] }),
+    );
+    expect(screen.getByText("Addison can't find this file any more.")).toBeTruthy();
+    expect(screen.queryByText("Addison hasn't finished reading this.")).toBeNull();
+    expect(screen.queryByRole("button", { name: `Try again ${NAME}` })).toBeNull();
+    expect(screen.queryByRole("button", { name: `Update ${NAME}` })).toBeNull();
+    expect(screen.getByRole("button", { name: `Remove ${NAME}` })).toBeTruthy();
+  });
+
   it("shows a failed document as the core's own sentence, with the way back", () => {
     renderPanel(
       stateWith({
@@ -366,6 +429,58 @@ describe("the documents panel", () => {
     renderPanel(stateWith({ documents: [doc({ status: "pending", chunkCount: 0 })] }));
     expect(screen.getByText("Addison hasn't finished reading this.")).toBeTruthy();
     expect(screen.getByRole("button", { name: `Try again ${NAME}` })).toBeTruthy();
+  });
+
+  it("keeps every row's sentence, path and controls inside that row", () => {
+    // THE MUTATIONS THIS EXISTS FOR: `knowledgeStatusLine(documents[0])` in place
+    // of `knowledgeStatusLine(doc)`, and `documents[0].path` in place of
+    // `doc.path`. Every whole-page `getByText` in this file passes under both —
+    // the sentence IS on the page, just under the wrong document — and a panel
+    // whose rule is that a row never claims more than the core said about THAT
+    // document would then print "Ready. 3 passages." over a failed one and a
+    // failure over a working one, with nothing red anywhere.
+    renderPanel(
+      stateWith({
+        documents: [
+          doc(),
+          doc({
+            id: "d2",
+            displayName: NOTES,
+            path: NOTES_PATH,
+            status: "failed",
+            detail: NO_LOCAL_MODEL,
+            chunkCount: 0,
+          }),
+          doc({ id: "d3", displayName: LEASE, path: LEASE_PATH, onDisk: "missing" }),
+        ],
+      }),
+    );
+
+    const ready = rowFor(NAME);
+    expect(within(ready).getByText(NAME)).toBeTruthy();
+    expect(within(ready).getByText(PATH)).toBeTruthy();
+    expect(within(ready).getByText("Ready. 3 passages.")).toBeTruthy();
+    expect(within(ready).queryByText(NO_LOCAL_MODEL)).toBeNull();
+    expect(within(ready).queryByText("Addison can't find this file any more.")).toBeNull();
+    expect(within(ready).queryByText(NOTES_PATH)).toBeNull();
+    expect(within(ready).queryByRole("button", { name: /^(Update|Try again) / })).toBeNull();
+
+    const failed = rowFor(NOTES);
+    expect(within(failed).getByText(NOTES)).toBeTruthy();
+    expect(within(failed).getByText(NOTES_PATH)).toBeTruthy();
+    expect(within(failed).getByText(NO_LOCAL_MODEL)).toBeTruthy();
+    expect(within(failed).queryByText("Ready. 3 passages.")).toBeNull();
+    expect(within(failed).queryByText(PATH)).toBeNull();
+    expect(within(failed).getByRole("button", { name: `Try again ${NOTES}` })).toBeTruthy();
+
+    const gone = rowFor(LEASE);
+    expect(within(gone).getByText(LEASE)).toBeTruthy();
+    expect(within(gone).getByText(LEASE_PATH)).toBeTruthy();
+    expect(within(gone).getByText("Addison can't find this file any more.")).toBeTruthy();
+    expect(within(gone).queryByText("Ready. 3 passages.")).toBeNull();
+    expect(within(gone).queryByText(PATH)).toBeNull();
+    // A file that is gone offers the one thing that can still be done to it.
+    expect(within(gone).queryByRole("button", { name: /^(Update|Try again) / })).toBeNull();
   });
 
   it("re-reads exactly the document whose control was pressed", () => {
@@ -399,14 +514,56 @@ describe("the documents panel", () => {
     // The consequence this two-press has that no other one in Settings does: the
     // knowledge tables are excluded from restore points, so the usual way back is
     // not there. It is said at the moment of the second press.
-    expect(
-      screen.getByText(
-        "Removing a document is permanent — a restore point won't bring it back. The file on " +
-          "your computer is left alone.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText(REMOVAL_IS_PERMANENT)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Remove Notes.txt" }));
     expect(state.handleRemove).toHaveBeenCalledWith("d2", "Notes.txt");
+  });
+
+  it("disarms a primed Remove when another row is re-read", () => {
+    // Mutation: drop `setConfirmingRemove(null)` from the panel's `reindex`.
+    // What it costs: the person primes Remove on one document, changes their
+    // mind, presses Update on another — and the first row sits there still
+    // reading "Really remove?", so the next single click on it is a permanent
+    // delete they never confirmed, on the one page in Settings where a restore
+    // point cannot bring the document back.
+    const state = stateWith({
+      documents: [
+        doc({ onDisk: "changed" }),
+        doc({ id: "d2", displayName: NOTES, path: NOTES_PATH, onDisk: "changed" }),
+      ],
+    });
+    renderPanel(state);
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${NAME}` }));
+    expect(screen.getByRole("button", { name: `Remove ${NAME}` }).textContent).toBe(
+      "Really remove?",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: `Update ${NOTES}` }));
+    expect(state.handleReindex).toHaveBeenCalledWith("d2");
+    // Back to one press away from nothing.
+    expect(screen.getByRole("button", { name: `Remove ${NAME}` }).textContent).toBe("Remove");
+    expect(screen.queryByText(REMOVAL_IS_PERMANENT)).toBeNull();
+  });
+
+  it("disarms a primed Remove when the list is read again", () => {
+    // Mutation: drop the `useEffect` on `documents`. The panel does not start
+    // every refresh itself — a core "ready", an add, another row's removal all
+    // land here as a new array from the parser — so the press-time reset above
+    // cannot cover this one. The rows underneath an armed control get replaced
+    // and the arming would still be pointing at the old list.
+    const state = stateWith({ documents: [doc()] });
+    const { rerender } = renderPanel(state);
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${NAME}` }));
+    expect(screen.getByRole("button", { name: `Remove ${NAME}` }).textContent).toBe(
+      "Really remove?",
+    );
+
+    // A fresh answer to `knowledge.list`: same document, newly parsed rows.
+    rerender(
+      <KnowledgePanel connected={true} knowledge={{ ...state, documents: [doc()] }} />,
+    );
+    expect(screen.getByRole("button", { name: `Remove ${NAME}` }).textContent).toBe("Remove");
+    expect(screen.queryByText(REMOVAL_IS_PERMANENT)).toBeNull();
   });
 
   it("says what a finished removal did, and to which document", () => {
