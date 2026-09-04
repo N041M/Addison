@@ -236,6 +236,13 @@ export function PermissionCard({ request, onRespond, expired }: Props) {
  */
 function ExpiredCard({ request }: { request: PermissionRequest }) {
   const command = request.arming ? request.arming.command : request.command;
+  // The dead keyword card keeps the automation's NAME too, as prose — the line the
+  // live card puts under its label. A person with three automations who looks back
+  // at a stopped card is owed which one this was, and the core's lead sentence for
+  // this shape ("This time it wants to run:") names nothing on its own.
+  const consequence = request.arming
+    ? `${request.arming.automationName} — ${request.arming.scheduleSentence}`
+    : request.description;
   return (
     <div
       {...CONSENT_CONTAINER}
@@ -243,7 +250,7 @@ function ExpiredCard({ request }: { request: PermissionRequest }) {
       className={CONSENT_CLASS + " px-3.5 py-3"}
     >
       <p className="m-0 text-[12px] font-medium leading-[1.45] text-muted">{request.label}</p>
-      <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-muted">{request.description}</p>
+      <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-muted">{consequence}</p>
       {command && <CommandBlock command={command} muted />}
       {request.preview && (
         <p className="m-0 mt-2 text-[12px] leading-[1.55] text-muted">{request.preview}</p>

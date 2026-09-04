@@ -231,8 +231,12 @@ describe("the expired arming card", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].textContent).toBe(ARMED_COMMAND);
     expect(blocks[0].className).toContain("text-muted");
-    // The name is nowhere on the dead card — not in the block, not anywhere.
-    expect(container.textContent).not.toContain(AUTOMATION_NAME);
+    // The name is on the dead card as PROSE — which automation this was is worth
+    // reading back — and never inside the block. Mutation: render
+    // `request.description` for an arming card, and the name vanishes.
+    expect(blocks[0].textContent).not.toContain(AUTOMATION_NAME);
+    expect(container.textContent).toContain(`${AUTOMATION_NAME} — Every Monday at 7:30`);
+    expect(container.textContent).not.toContain("This time it wants to run:");
   });
 
   it("is dead: no buttons and no code box", () => {
