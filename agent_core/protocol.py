@@ -71,6 +71,27 @@ class Method:
     # is refused by the core (main.py, ``_handle_permission_respond``); the webview
     # showing the card as expired is presentation, this is the enforcement.
     CONVERSATION_STOP = "conversation.stop"
+    # {toolId, label, description, riskTier, command?, preview?, arming?} ->
+    # notification only. The card is built in ONE place (main.build_permission_card)
+    # and `shell/src/__tests__/fixtures/permission.requestGrant.json` is the
+    # generated artifact both sides are pinned against.
+    #
+    # `command` is the exact text of a per-call "wants to run" card — present
+    # EXACTLY when there is a per-call detail and the tool wrote no sentence of its
+    # own, omitted (never null) otherwise. It is a FIELD rather than a phrase inside
+    # `description` since 2026-09-04: the webview used to recover it by searching
+    # that sentence for `run: `, which drew ordinary prose containing those two
+    # words as a command, and made the core's English load-bearing in a file that
+    # never mentions it. `description` now carries the lead sentence alone, and the
+    # webview renders `command` WHOLE — the detail is capped at
+    # MAX_PERMISSION_DETAIL_CHARS precisely so the whole of it fits.
+    #
+    # `preview` is the delete preview (5.6): prose ABOUT the command, in its own
+    # field so it is never read as part of it. `arming` is the keyword gate's
+    # payload (step 8 phase 3), and AN ARMING CARD CARRIES NO CARD-LEVEL `command`
+    # at all: `arm_automation`'s per-call detail is the automation's NAME, so the
+    # only command on that card is the one the OS would run, `arming.command`.
+    # Mirrored in shell/src/types/protocol.ts (`PermissionRequest`).
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     # {} -> {request: card | null}. THE RE-SYNC QUERY, and the reason it exists is
     # worth stating: `permission.requestGrant` is a NOTIFICATION, so a card that is

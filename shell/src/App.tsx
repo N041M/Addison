@@ -1675,7 +1675,12 @@ function saveBool(key: string, value: boolean): void {
   }
 }
 
-function normalizePermission(p: Record<string, unknown>): PermissionRequest {
+// Exported only so it can be tested directly, the way `normalizeActivity` below
+// is. This is the SINGLE point where a `permission.requestGrant` frame — or the
+// card `permission.pending` hands back — becomes a PermissionRequest, so a field
+// dropped here is a field the card can never render however correct the core and
+// the component both are.
+export function normalizePermission(p: Record<string, unknown>): PermissionRequest {
   const req = asRecord(p.request) ?? p;
   const riskTier = req.riskTier;
   // The arming half (step 8 phase 3) when the core sent one — the code to retype
@@ -1683,6 +1688,16 @@ function normalizePermission(p: Record<string, unknown>): PermissionRequest {
   // and the property is omitted rather than set to undefined so `request.arming`
   // is the whole of the question the card asks itself.
   const arming = parseArming(req.arming);
+  // The exact command, when the core sent one (protocol.ts, `PermissionRequest`).
+  // It has to survive this boundary or the card renders consent to an unnamed
+  // command: this function is the ONLY path from the wire to the component, for
+  // both the notification and the `permission.pending` re-sync. Kept only as a
+  // non-empty string, and set as an ABSENT property rather than undefined, so the
+  // card's `request.command &&` is the whole of the question it asks itself.
+  const command = typeof req.command === "string" ? req.command : "";
+  // The delete preview (5.6) crosses here for the same reason and had been left
+  // out, so the sentence the core walks the filesystem to compute reached no card.
+  const preview = typeof req.preview === "string" ? req.preview : "";
   return {
     toolId: typeof req.toolId === "string" ? req.toolId : "",
     label: typeof req.label === "string" ? req.label : "Addison would like to do something",
@@ -1691,6 +1706,8 @@ function normalizePermission(p: Record<string, unknown>): PermissionRequest {
         ? req.description
         : "Addison is asking for your permission to continue.",
     riskTier: riskTier === "medium" || riskTier === "high" ? riskTier : "low",
+    ...(command ? { command } : {}),
+    ...(preview ? { preview } : {}),
     ...(arming ? { arming } : {}),
   };
 }

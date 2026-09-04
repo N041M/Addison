@@ -182,7 +182,8 @@ describe("a surface's pinned slot", () => {
 const RUN_REQUEST = {
   toolId: "run_command",
   label: "Addison would like to run a command",
-  description: "This changes files on your computer. It will run: rm -rf ./build",
+  description: "This changes files on your computer.",
+  command: "rm -rf ./build",
   riskTier: "high" as const,
 };
 
@@ -212,13 +213,13 @@ describe("the consent card", () => {
 
   it("shows the exact command on a destructive card, as a machine fact", () => {
     render(<PermissionCard request={RUN_REQUEST} onRespond={vi.fn()} />);
-    // The lead keeps the core's wording up to and including "run:"; the command
-    // itself is split off into the mono chip, and is never dropped or shortened.
-    expect(screen.getByText("This changes files on your computer. It will run:")).toBeTruthy();
+    // The core's sentence, and the command it sent BESIDE it — drawn as a machine
+    // fact, and never dropped, shortened or hidden behind a hover (H9).
+    expect(screen.getByText("This changes files on your computer.")).toBeTruthy();
     const chip = screen.getByText("rm -rf ./build");
     expect(chip.className).toContain("font-mono");
-    // Truncated on screen, so the full text has to survive somewhere reachable.
-    expect(chip.getAttribute("title")).toBe("rm -rf ./build");
+    expect(chip.className).not.toContain("truncate");
+    expect(chip.getAttribute("title")).toBeNull();
   });
 
   it("gives both answers a real target, with Allow the dominant one", () => {

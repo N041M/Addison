@@ -680,13 +680,18 @@ def call_permission_sentence(tool: Any, detail: str | None) -> str | None:
     keep the caller's standing idiom.
 
     A tool may implement ``permission_sentence(detail) -> str``. Nothing did before
-    2026-08-11, and the caller's idiom — ``"This time it wants to run: {detail}"``
-    — was written for ``run_command``, whose detail IS a command. It became wrong
-    the day a card carried a FILE NAME instead: "it wants to run: notes.txt" says
-    Addison is about to execute somebody's shopping list, and the frontend's card
-    splits on that exact ``run: `` prefix to render what follows as a machine fact
-    (``PermissionCard.tsx``), so the file name was about to be drawn as a command
-    too.
+    2026-08-11, and the caller's idiom — the lead sentence "This time it wants to
+    run:" with the detail beside it — was written for ``run_command``, whose detail
+    IS a command. It became wrong the day a card carried a FILE NAME instead: "it
+    wants to run: notes.txt" says Addison is about to execute somebody's shopping
+    list, and the card draws that value as a machine fact, so the file name was
+    about to be shown as a command too.
+
+    A tool that answers here therefore also decides that this card has NO command
+    block at all: ``main.build_permission_card`` sends the ``command`` field only
+    for the caller's own idiom, so a sentence-writing tool's card is prose and
+    nothing else (``PermissionCard.tsx`` renders the field, and since 2026-09-04
+    reads no prefix out of any sentence).
 
     The wording belongs to the TOOL for the same reason ``permission_detail`` does:
     the sentence a person reads before allowing an action is part of that action's

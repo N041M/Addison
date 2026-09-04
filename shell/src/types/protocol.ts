@@ -460,15 +460,43 @@ export interface PermissionRequest {
   description: string;
   riskTier: RiskTier;
   /**
+   * THE EXACT COMMAND, when this card is the per-call "wants to run" shape. Then
+   * `description` is the lead sentence alone ("This time it wants to run:") and
+   * this is what would run, verbatim. Omitted — never null, never empty — on the
+   * other two card shapes: a tool that words its own consequence sentence (the
+   * file tools name the file), and the standing description a coarse card shows.
+   * Absent on the keyword gate's card too: `arm_automation`'s detail is the
+   * automation's NAME, so the only command there is the one the OS would run,
+   * `arming.command` — which is what the expired card draws under the sentence.
+   *
+   * A FIELD, not a phrase inside `description`, and that is the fix of 2026-09-04.
+   * This card used to recover the command by searching the sentence for `run: `
+   * and rendering everything after the FIRST occurrence as a machine fact. Three
+   * things were wrong with it and the third is the one that would have come back:
+   * a SAFE sentence with those two words in ordinary prose ("This routine will
+   * run: it needs your calendar to do that.") drew English in the mono block whose
+   * whole visual grammar means "this is the exact command"; the split re-parsed a
+   * sentence the core composes in main.py, so rewording that sentence deleted the
+   * command block with no test failing anywhere; and the two hardcoded strings
+   * lived in two languages with nothing connecting them.
+   *
+   * RENDERED WHOLE. The core caps a detail at MAX_PERMISSION_DETAIL_CHARS (120)
+   * precisely so all of it can be shown, so the card wraps it and never truncates
+   * it: hover is not consent, and `git status && rm -rf ~/Documents/…` read as
+   * `git status && rm -r…` is a different command from the one being approved.
+   * Mirrored in protocol.py.
+   */
+  command?: string;
+  /**
    * THE DELETE PREVIEW (5.6, first form). One plain sentence about what this
    * command would delete ("About to delete 1,240 files in 12 folders.") computed
    * in the core by WALKING the paths, never by running anything. Present only when
    * the core could read the command as a delete with paths it could name, which is
    * deliberately a narrow set: it says nothing rather than a wrong number.
    *
-   * Its own field, not part of `description`, because the card splits that string
-   * on the `run: ` prefix to draw the command as a machine fact, a sentence
-   * appended there would be rendered as though it were part of the command.
+   * Its own field, not part of `description`, because it is prose ABOUT the
+   * command and must never be read as part of it — it sits below the command block
+   * and is styled as words rather than as a machine fact.
    * Mirrored in protocol.py (`shell.previewDeletePaths` is the walk behind it).
    */
   preview?: string;

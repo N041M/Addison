@@ -108,8 +108,8 @@ sequenceDiagram
         PG-->>ORC: GRANTED (no card)
     else SAFE mode, or a destructive OPEN call
         PG->>SRV: _on_permission_request(tool_id, detail)
-        Note over SRV: park a threading.Event keyed by tool_id<br/>destructive-OPEN: description = the exact command text
-        SRV-->>WV: permission.requestGrant, toolId label description riskTier
+        Note over SRV: park a threading.Event keyed by tool_id<br/>destructive-OPEN: description = the lead sentence, command = the exact command text
+        SRV-->>WV: permission.requestGrant, toolId label description riskTier, plus command and preview when there are any
         Note over WV: user taps Allow or Not now
         WV->>SRV: permission.respond, toolId and allow
         SRV->>SRV: _handle_permission_respond sets the event

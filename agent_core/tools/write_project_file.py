@@ -165,9 +165,11 @@ class WriteProjectFileTool:
 
         Written for Mira and Petr (design-doc §5), and it has one job: say WHICH
         file and WHAT will happen to it, in that order, before anybody presses
-        Allow. The caller's standing idiom is "This time it wants to run: …",
-        which was written for a command and would announce a shopping list as
-        something Addison is about to execute.
+        Allow. The caller's standing idiom is the lead sentence "This time it wants
+        to run:" with the detail shown beside it as a machine fact, which was
+        written for a command and would announce a shopping list as something
+        Addison is about to execute. Answering here also keeps that machine-fact
+        block off this card entirely (``call_permission_sentence``).
 
         ``detail`` is the resolved file's NAME, never its path (see
         ``permission_detail_for_path``) — the card leaves the Agent Core for the

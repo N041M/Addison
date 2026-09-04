@@ -1245,6 +1245,10 @@ def test_the_code_reaches_the_person_and_nothing_else_ever_sees_it(tmp_path, mon
         code = card["arming"]["nonce"]
         assert card["toolId"] == "arm_automation"
         assert card["arming"]["command"] == _ROW["command"]
+        # The ONLY command on a keyword card is the arming payload's. A card-level
+        # `command` here would be the automation's NAME drawn as a command
+        # (2026-09-04); pinned on the real tool, not a stand-in.
+        assert "command" not in card
         _answer_arm(h, 2, code)
         reply = h.writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
     finally:
