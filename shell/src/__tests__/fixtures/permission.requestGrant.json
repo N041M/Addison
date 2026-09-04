@@ -1,0 +1,7 @@
+{
+  "toolId": "run_command",
+  "label": "Run a command",
+  "description": "This time it wants to run:",
+  "riskTier": "high",
+  "command": "git status --short && rm -rf ~/Documents/Archive/2024 && rm -rf ~/Documents/Archive/2025 && echo \"the archive is tidied\""
+}

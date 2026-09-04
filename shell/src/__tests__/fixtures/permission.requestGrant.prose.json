@@ -1,0 +1,6 @@
+{
+  "toolId": "prose_sentence_tool",
+  "label": "Addison would like to start a routine",
+  "description": "This routine will run: it needs your calendar to do that.",
+  "riskTier": "medium"
+}

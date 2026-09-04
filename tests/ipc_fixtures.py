@@ -11,8 +11,10 @@ one artifact both sides share:
   shape drifts from the committed files (regenerate: ``python tests/ipc_fixtures.py``
   from the repo root, then re-run the vitest suite);
 - the vitest suites consume the same files: parsers.fixtures.test.ts pins what
-  each parser makes of a request result, and activityPanel.test.tsx renders the
-  tool.activityUpdate notification through the real component.
+  each parser makes of a request result, activityPanel.test.tsx renders the
+  tool.activityUpdate notification through the real component, and
+  permissionCardCommand.test.tsx renders the two permission.requestGrant card
+  shapes through the real PermissionCard.
 
 So a core change that would break the frontend parsers fails CI on whichever
 side runs first — the method-name drift test covers *names*, this covers *shapes*.
@@ -30,7 +32,7 @@ from pathlib import Path
 
 import httpx
 
-from agent_core.main import JsonRpcServer
+from agent_core.main import JsonRpcServer, build_permission_card
 from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel, EffortLevel
 from agent_core.profiles import SIMPLE
@@ -40,8 +42,15 @@ from agent_core.secret_presence import SecretPresence
 from agent_core.snapshots.model import ConfigSnapshot
 from agent_core.snapshots.scope import _CAPTURED_TABLES
 from agent_core.snapshots.snapshot_manager import _canonical, _fingerprint
-from agent_core.tools.base import ActionSnapshot, call_permission_detail
+from agent_core.tools.base import (
+    MAX_PERMISSION_DETAIL_CHARS,
+    ActionSnapshot,
+    RiskTier,
+    ToolDefinition,
+    call_permission_detail,
+)
 from agent_core.tools.read_web_page import ReadWebPageTool
+from agent_core.tools.run_command import RunCommandTool
 from agent_core.tools.web_search import WebSearchTool
 from agent_core.tools.registry import ToolRegistry
 
@@ -297,6 +306,78 @@ def _activity_notification(server: JsonRpcServer) -> dict:
     return captured[0]["params"]
 
 
+# ---------------------------------------------------------------------------
+# The permission card — the app's consent surface (H9, 2026-09-04)
+# ---------------------------------------------------------------------------
+
+# EXACTLY MAX_PERMISSION_DETAIL_CHARS characters (120), asserted below rather than
+# counted by hand. The cap is chosen so the whole command can be SHOWN, so the
+# fixture's job is to carry the longest thing that ever legitimately arrives and let
+# the frontend test prove all 120 characters land in the DOM. It is also shaped like
+# the sighting that made this a defect: a harmless-looking prefix followed by the
+# part a truncated card would hide.
+_CARD_FIXTURE_COMMAND = (
+    "git status --short && rm -rf ~/Documents/Archive/2024 "
+    '&& rm -rf ~/Documents/Archive/2025 && echo "the archive is tidied"'
+)
+
+
+def _permission_card_fixture(server: JsonRpcServer) -> dict:
+    """The ``permission.requestGrant`` params for a per-call "wants to run" card.
+
+    Built by the SAME function the server builds it with
+    (``main.build_permission_card``, which ``_on_permission_request`` calls and
+    ``_ask_once`` emits verbatim), from the REAL ``run_command`` tool and a detail
+    taken through the real ``call_permission_detail``. So the artifact the frontend
+    renders in its tests is the payload this app sends, and the day the core stops
+    sending ``command`` this file changes and the drift test says so out loud.
+
+    ``server`` is unused and taken anyway, so this reads like every other fixture
+    here and so a future version that needs the server does not change the call.
+    """
+    del server
+    detail = call_permission_detail(RunCommandTool(), {"command": _CARD_FIXTURE_COMMAND})
+    assert detail is not None and len(detail) == MAX_PERMISSION_DETAIL_CHARS, (
+        "the fixture command must be exactly MAX_PERMISSION_DETAIL_CHARS long: it is "
+        "what proves the frontend renders a full-length command whole"
+    )
+    return build_permission_card(RunCommandTool(), detail)
+
+
+class _ProseSentenceTool:
+    """A tool that words its own card, in prose that happens to contain "run: ".
+
+    A STAND-IN, and deliberately so: no shipping tool writes that sentence today,
+    and the shape it pins is precisely the one that had no defence. The card used to
+    be taken apart in the webview by searching ``description`` for the first
+    ``run: `` and drawing everything after it in the mono block whose visual grammar
+    means "this is the exact command" — so this sentence rendered "it needs your
+    calendar to do that." as a command.
+
+    It also pins the harder half: there IS a detail here, and there is still no
+    ``command`` field. Presence is decided by which of the three card shapes the
+    core built, never by whether a detail existed.
+    """
+
+    definition = ToolDefinition(
+        id="prose_sentence_tool",
+        label="Addison would like to start a routine",
+        description="Runs a routine you saved.",
+        risk_tier=RiskTier.MEDIUM,
+        parameters_schema={"type": "object", "properties": {}},
+    )
+
+    def permission_sentence(self, detail: str) -> str:
+        return f"This routine will run: it needs your {detail} to do that."
+
+
+def _permission_card_prose_fixture(server: JsonRpcServer) -> dict:
+    """The same builder, on a card whose SENTENCE contains "run: " and which must
+    carry no ``command`` at all."""
+    del server
+    return build_permission_card(_ProseSentenceTool(), "calendar")
+
+
 def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
     """Method name -> the exact payload the core puts on the wire for it today.
 
@@ -352,6 +433,11 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "costPlan.propose": server._cost_plan_propose(),
         "endpoint.proposeFromConversation": server._endpoint_propose(),
         "tool.activityUpdate": _activity_notification(server),
+        # The consent surface, in BOTH of the shapes the frontend has to draw
+        # differently. Two keys because one payload cannot show both, exactly as
+        # with `automation.list.simple`; the second is a shape, not a method name.
+        "permission.requestGrant": _permission_card_fixture(server),
+        "permission.requestGrant.prose": _permission_card_prose_fixture(server),
     }
 
 

@@ -37,7 +37,10 @@ const EXPIRED_MESSAGE = "This request ended when you stopped the answer.";
 const REQUEST: PermissionRequest = {
   toolId: "spy_tool",
   label: "Delete the files in Downloads?",
-  description: "This time it wants to run: rm -rf ~/Downloads/*",
+  // The core's two values, as the core now sends them: the lead sentence, and the
+  // exact command in its own field (H9).
+  description: "This time it wants to run:",
+  command: "rm -rf ~/Downloads/*",
   riskTier: "high",
 };
 
@@ -134,6 +137,18 @@ describe("the expired card", () => {
     expect(screen.queryByText("Allow")).toBeNull();
     expect(screen.queryByText("Not now")).toBeNull();
     expect(onRespond).not.toHaveBeenCalled();
+  });
+
+  it("keeps the command, whole and muted", () => {
+    // What was nearly approved is exactly the thing worth being able to read
+    // afterwards, so the dead card keeps it — in the muted ink of a row that is
+    // present but not available, and still never cut.
+    render(<PermissionCard request={REQUEST} onRespond={vi.fn()} expired />);
+    const block = document.querySelector("[data-consent-command]")!;
+    expect(block.textContent).toBe(REQUEST.command);
+    expect(block.className).toContain("text-muted");
+    expect(block.className).not.toContain("truncate");
+    expect(block.getAttribute("title")).toBeNull();
   });
 
   it("is muted, not accented — the accent is for what is live", () => {

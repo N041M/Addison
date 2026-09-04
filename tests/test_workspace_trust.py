@@ -714,26 +714,28 @@ def test_simple_is_still_confined_to_trusted_folders(tmp_path):
 
 
 def test_the_simple_card_says_which_file_and_never_reads_as_a_command():
-    """The sentence Mira and Petr read. It names the file and says the change can
-    be undone — and it must NOT contain ``run: ``, which the frontend splits on to
-    render what follows as a command (``PermissionCard.tsx``): a card announcing
-    "wants to run: shopping.txt" is a lie about what is about to happen, and the
-    reason the wording belongs to the tool rather than to the server's one idiom.
+    """The sentence Mira and Petr read. It names the file, says the change can be
+    undone, and — the half that mattered before the command became a field — comes
+    back with NO command beside it: a card announcing "wants to run: shopping.txt"
+    is a lie about what is about to happen, and the reason the wording belongs to
+    the tool rather than to the server's one idiom.
 
     ``run_command``'s card is asserted beside it, because the change had to leave
-    that idiom exactly where it was."""
+    that idiom exactly where it was — the lead sentence and the command are simply
+    two values now instead of one composed string (H9, 2026-09-04)."""
     from agent_core.main import _card_consequence
 
     write = WriteProjectFileTool()
-    sentence = _card_consequence(write, "shopping.txt")
+    sentence, command = _card_consequence(write, "shopping.txt")
     assert "shopping.txt" in sentence
     assert "undo" in sentence
-    assert "run: " not in sentence
+    assert command is None
     # No detail (a SAFE coarse card) still falls back to the standing description.
-    assert _card_consequence(write, None) == write.definition.description
+    assert _card_consequence(write, None) == (write.definition.description, None)
     # The historical idiom, untouched, for the tool it was written for.
     assert _card_consequence(_FakeRunCommand(), "rm -rf /tmp/x") == (
-        "This time it wants to run: rm -rf /tmp/x"
+        "This time it wants to run:",
+        "rm -rf /tmp/x",
     )
 
 

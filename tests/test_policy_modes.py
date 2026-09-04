@@ -579,9 +579,10 @@ def test_dev_routine_cards_even_for_a_harmless_command(tmp_path):
             lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT
         )
         assert card["params"]["toolId"] == "run_command"
-        assert card["params"]["description"] == (
-            "This time it wants to run: echo policy-mode-test"
-        )
+        # The lead sentence, and the exact command in its OWN field (H9): the
+        # webview renders that field whole and reads no command out of any prose.
+        assert card["params"]["description"] == "This time it wants to run:"
+        assert card["params"]["command"] == "echo policy-mode-test"
         reader.feed(
             {"jsonrpc": "2.0", "id": 100, "method": Method.PERMISSION_RESPOND,
              "params": {"toolId": "run_command", "allow": True}}
@@ -615,10 +616,10 @@ def test_destructive_dev_routine_card_names_the_command_every_run(tmp_path):
             ]
             assert len(cards) == rid
             assert cards[-1]["params"]["toolId"] == "run_command"
-            # The card names the exact command being approved this time.
-            assert cards[-1]["params"]["description"] == (
-                "This time it wants to run: true && true"
-            )
+            # The card names the exact command being approved this time, in the
+            # field the webview draws as a machine fact (H9).
+            assert cards[-1]["params"]["description"] == "This time it wants to run:"
+            assert cards[-1]["params"]["command"] == "true && true"
             reader.feed(
                 {"jsonrpc": "2.0", "id": 100 + rid, "method": Method.PERMISSION_RESPOND,
                  "params": {"toolId": "run_command", "allow": True}}
@@ -693,9 +694,8 @@ def test_widget_run_destructive_prompts_per_invocation(tmp_path):
                 if f.get("method") == Method.PERMISSION_REQUEST_GRANT
             ]
             assert len(cards) == rid
-            assert cards[-1]["params"]["description"] == (
-                "This time it wants to run: true && true"
-            )
+            assert cards[-1]["params"]["description"] == "This time it wants to run:"
+            assert cards[-1]["params"]["command"] == "true && true"
             reader.feed(
                 {"jsonrpc": "2.0", "id": 100 + rid, "method": Method.PERMISSION_RESPOND,
                  "params": {"toolId": "run_command", "allow": True}}

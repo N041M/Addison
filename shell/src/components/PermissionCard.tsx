@@ -13,6 +13,14 @@
 // nothing else: the question, the consequence and the exact command text are
 // rendered as sent, and both answers stay one press away.
 //
+// AND NOTHING HERE PARSES A SENTENCE (2026-09-04). The command arrives in its own
+// field, `request.command`, present exactly when the core built a per-call "wants
+// to run" card. This file used to recover it by searching `description` for the
+// first `run: ` and rendering the remainder as a machine fact, which meant SAFE
+// prose containing those two words was drawn as a command, and meant the core's
+// English in main.py was load-bearing here with nothing connecting the two. The
+// core may now reword its lead sentence freely: this file never reads it.
+//
 // ---------------------------------------------------------------------------
 // THE ARMING VARIANT (step 8 phase 3) — the keyword gate's face.
 // ---------------------------------------------------------------------------
@@ -72,13 +80,6 @@ interface Props {
   expired?: boolean;
 }
 
-// Per-invocation destructive cards (OPEN/Developer mode) describe the exact
-// command each time, phrased by the core as "…run: <command>". When we see that
-// shape we split the command off and set it as a machine fact (mono, inset chip)
-// so it reads as data, not prose. SAFE-mode cards have no "run: " and render
-// exactly as before.
-const RUN_PREFIX = "run: ";
-
 // ---------------------------------------------------------------------------
 // The hardened container (2026-08-08, Phase-3 review surface, owner decision 3).
 //
@@ -111,12 +112,34 @@ const CONSENT_CONTAINER = { "data-consent-card": "" } as const;
 const CONSENT_CLASS =
   "relative isolate animate-[fadeRise_.2s_ease_both] rounded-[7px] border border-rail bg-panel";
 
-function splitCommand(description: string): { lead: string; command: string | null } {
-  const at = description.indexOf(RUN_PREFIX);
-  if (at === -1) return { lead: description, command: null };
-  const command = description.slice(at + RUN_PREFIX.length).trim();
-  if (!command) return { lead: description, command: null };
-  return { lead: description.slice(0, at + RUN_PREFIX.length).trimEnd(), command };
+/**
+ * The command, WHOLE — the one block on this card that is a machine fact rather
+ * than a sentence.
+ *
+ * No `truncate` and no `title`. The core caps a detail at
+ * MAX_PERMISSION_DETAIL_CHARS (agent_core/tools/base.py) precisely so all of it
+ * can be shown here, and a card that shows a prefix with the rest in a tooltip is
+ * asking for consent to something the reader has not been shown: hover is not
+ * consent, it is not reachable from a keyboard or a screen reader, and `git status
+ * --short && rm -rf ~/Documents/…` cut to `git status --short && rm -r…` is a
+ * different command from the one being approved. It wraps instead, and a
+ * multi-line command keeps its own line breaks (`whitespace-pre-wrap`), which is
+ * the same promise the arming card's preview has always made.
+ *
+ * `muted` is the expired card's ink: the record of what was asked, not a live ask.
+ */
+function CommandBlock({ command, muted }: { command: string; muted?: boolean }) {
+  return (
+    <p
+      data-consent-command=""
+      className={
+        "m-0 mt-2 whitespace-pre-wrap break-words rounded-[4px] bg-paper px-2 py-1 font-mono text-[10.5px] " +
+        (muted ? "text-muted" : "text-ink")
+      }
+    >
+      {command}
+    </p>
+  );
 }
 
 /** The dead state's one sentence. Plain, and it says what happened rather than
@@ -136,22 +159,14 @@ export function PermissionCard({ request, onRespond, expired }: Props) {
   if (request.arming) {
     return <ArmingCard request={request} arming={request.arming} onRespond={onRespond} />;
   }
-  const { lead, command } = splitCommand(request.description);
   return (
     <div
       {...CONSENT_CONTAINER}
       className={CONSENT_CLASS + " px-3.5 py-3"}
     >
       <p className="m-0 text-[12px] font-medium leading-[1.45] text-ink">{request.label}</p>
-      <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-ink-soft">{lead}</p>
-      {command && (
-        <p
-          title={command}
-          className="m-0 mt-2 truncate rounded-[4px] bg-paper px-2 py-1 font-mono text-[10.5px] text-ink"
-        >
-          {command}
-        </p>
-      )}
+      <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-ink-soft">{request.description}</p>
+      {request.command && <CommandBlock command={request.command} />}
       {/* THE DELETE PREVIEW (5.6). One plain sentence about what the command would
           take, written whole by the core and rendered verbatim: it is prose about
           the command, so it sits below the command block and never inside it, and
@@ -194,11 +209,13 @@ export function PermissionCard({ request, onRespond, expired }: Props) {
 /**
  * What a permission card becomes when its turn is stopped.
  *
- * It keeps the question — the label, and the consequence sentence under it — so a
- * person who looks back can see what they turned down by stopping; both go MUTED,
- * the app's standing idiom for a row that is present but not available (the
- * WAITING routines and automations in Settings say their one plain sentence in
- * exactly this ink). Then a hairline rule, and the sentence.
+ * It keeps the question — the label, the consequence sentence under it, and the
+ * command if there was one — so a person who looks back can see what they turned
+ * down by stopping; all of it goes MUTED, the app's standing idiom for a row that
+ * is present but not available (the WAITING routines and automations in Settings
+ * say their one plain sentence in exactly this ink). The command is still shown
+ * WHOLE: what was nearly approved is exactly the thing worth being able to read
+ * afterwards. Then a hairline rule, and the sentence.
  *
  * NO BUTTONS AT ALL rather than disabled ones. A disabled Allow is still an Allow
  * in the reading order, still the accent-filled thing the eye goes to, and still
@@ -208,7 +225,6 @@ export function PermissionCard({ request, onRespond, expired }: Props) {
  * not to.
  */
 function ExpiredCard({ request }: { request: PermissionRequest }) {
-  const { lead } = splitCommand(request.description);
   return (
     <div
       {...CONSENT_CONTAINER}
@@ -216,7 +232,8 @@ function ExpiredCard({ request }: { request: PermissionRequest }) {
       className={CONSENT_CLASS + " px-3.5 py-3"}
     >
       <p className="m-0 text-[12px] font-medium leading-[1.45] text-muted">{request.label}</p>
-      <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-muted">{lead}</p>
+      <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-muted">{request.description}</p>
+      {request.command && <CommandBlock command={request.command} muted />}
       <p className="m-0 mt-2.5 border-t border-line pt-2.5 text-[12px] leading-[1.55] text-ink-soft">
         {EXPIRED_MESSAGE}
       </p>

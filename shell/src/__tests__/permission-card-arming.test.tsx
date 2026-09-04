@@ -284,7 +284,8 @@ describe("the arming card's friction", () => {
 const ORDINARY: PermissionRequest = {
   toolId: "run_command",
   label: "Addison would like to run a command",
-  description: "This changes files on your computer. It will run: rm -rf ./build",
+  description: "This changes files on your computer.",
+  command: "rm -rf ./build",
   riskTier: "high",
 };
 
@@ -292,9 +293,9 @@ describe("the ordinary consent card", () => {
   it("is untouched by the arming variant: same two answers, same allow-alone reply", () => {
     const onRespond = vi.fn();
     render(<PermissionCard request={ORDINARY} onRespond={onRespond} />);
-    expect(screen.getByText("This changes files on your computer. It will run:")).toBeTruthy();
+    expect(screen.getByText("This changes files on your computer.")).toBeTruthy();
     const chip = screen.getByText("rm -rf ./build");
-    expect(chip.className).toContain("truncate");
+    expect(chip.className).toContain("font-mono");
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     // ALLOW ALONE. Nothing about arming rides an ordinary answer, so the core's
     // existing round-trip sees exactly the payload it always saw.

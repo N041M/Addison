@@ -444,27 +444,78 @@ def _env_api_key() -> str:
     return os.environ["ANTHROPIC_API_KEY"]
 
 
-def _card_consequence(tool, detail: str | None) -> str:
-    """The one line a permission card puts under the tool's label.
+# The lead sentence of the per-call "wants to run" card. A whole sentence on its
+# own: the command travels BESIDE it in the card's ``command`` field, never inside
+# it (``build_permission_card``).
+_RUN_LEAD_SENTENCE = "This time it wants to run:"
+
+
+def _card_consequence(tool, detail: str | None) -> tuple[str, str | None]:
+    """The line a permission card puts under the tool's label — and, when there is
+    one, the exact command that goes BESIDE that line rather than inside it.
+
+    Returns ``(description, command)``; ``command`` is None on every shape but one.
 
     THREE SHAPES, ONE FUNCTION, because the card and the CLI's stand-in must not
     word the same call two ways:
 
       * the tool wrote its own sentence for this call
         (``call_permission_sentence`` — the file tools name the file, since
-        "wants to run: notes.txt" is a lie about what is about to happen);
+        "wants to run: notes.txt" is a lie about what is about to happen). NO
+        command: the sentence is the whole consequence;
       * there is a per-call ``detail`` and no sentence — the historical idiom,
-        written for ``run_command`` and still exactly what it needs. The
-        frontend splits on this ``run: `` prefix to render the command as a
-        machine fact, so the words are load-bearing (``PermissionCard.tsx``);
+        written for ``run_command`` and still exactly what it needs. The lead
+        sentence and the command come back SEPARATELY, which is the 2026-09-04 fix:
+        the sentence used to be composed here as ``"…run: {detail}"`` and taken
+        apart again in the webview by searching it for ``run: ``. Two hardcoded
+        strings in two languages with nothing connecting them — rewording this line
+        deleted the command block with nothing failing, and a SAFE sentence with
+        those two words in ordinary prose grew a command block it had no command
+        for. The WORDS are no longer load-bearing; the FIELD is;
       * no detail at all — the tool's standing description, as SAFE cards have
-        always shown."""
+        always shown. No command."""
     sentence = call_permission_sentence(tool, detail)
     if sentence:
-        return sentence
+        return sentence, None
     if detail:
-        return f"This time it wants to run: {detail}"
-    return tool.definition.description
+        return _RUN_LEAD_SENTENCE, detail
+    return tool.definition.description, None
+
+
+def build_permission_card(
+    tool, detail: str | None = None, preview: str | None = None
+) -> dict:
+    """THE permission card — the exact ``permission.requestGrant`` params.
+
+    ONE builder, called by the server (``_on_permission_request``) and by the
+    fixture rig (``tests/ipc_fixtures.py``), so the committed artifact the frontend
+    renders in its tests is the payload this app actually sends. A hand-written
+    copy in the rig is the drift this whole fixture mechanism exists to prevent.
+
+    ``command`` is present EXACTLY when the card is the per-call "wants to run"
+    shape — a ``detail`` and no tool-authored sentence — and carries the detail
+    text verbatim, already capped at ``MAX_PERMISSION_DETAIL_CHARS`` by
+    ``call_permission_detail``. That cap is chosen so the WHOLE of it can be shown,
+    and the frontend shows the whole of it: hover is not consent, and a command cut
+    at an ellipsis is a different command from the one being approved. The key is
+    OMITTED, never null, on the other two shapes.
+
+    ``preview`` (5.6) is the delete preview and rides in its own field for the
+    neighbouring reason: it is prose ABOUT the command, so it must never be read as
+    part of it."""
+    definition = tool.definition
+    description, command = _card_consequence(tool, detail)
+    card: dict = {
+        "toolId": definition.id,
+        "label": definition.label,
+        "description": description,
+        "riskTier": definition.risk_tier.value,
+    }
+    if command:
+        card["command"] = command
+    if preview:
+        card["preview"] = preview
+    return card
 
 
 def _terminal_permission_handler(registry: ToolRegistry):
@@ -497,7 +548,15 @@ def _terminal_permission_handler(registry: ToolRegistry):
         # The per-invocation destructive card names the exact command each time —
         # or, for a tool that words its own consequence line, whatever it says
         # (``call_permission_sentence``; the file tools name the file).
-        print(f"  {_card_consequence(tool, detail)}")
+        description, command = _card_consequence(tool, detail)
+        print(f"  {description}")
+        if command:
+            # ON ITS OWN LINE, whole. The terminal has no mono block, but it has a
+            # line, and the promise is the same one the card makes: the command is
+            # shown complete and is never folded into the sentence above it. Both
+            # surfaces read the same two values out of the same function, so the
+            # CLI and the card cannot word one call two ways.
+            print(f"  {command}")
         # The delete preview (5.6), printed as its own line for the reason the card
         # keeps it in its own field: it describes the command, it is not part of it.
         if preview:
@@ -2081,10 +2140,12 @@ class JsonRpcServer(
 
         ``detail`` is set on every per-invocation card — destructive-in-OPEN, and
         since 2026-08-11 destructive-in-SAFE too — carrying the exact command text
-        or the file's name, already truncated by the tool. The card's description
-        then names precisely what is being approved this time, because that
-        approval never carries over to the next destructive call. How that fact is
-        WORDED belongs to the tool (``_card_consequence``).
+        or the file's name, already truncated by the tool. The card then names
+        precisely what is being approved this time, because that approval never
+        carries over to the next destructive call. How that fact is WORDED belongs
+        to the tool, and WHICH FIELD it lands in belongs to
+        ``build_permission_card``: a command travels in ``command``, on its own,
+        and is never composed into a sentence for the webview to take apart again.
 
         ``arming`` (step 8 phase 3) turns this into the KEYWORD CARD and is handled
         by ``_ask_with_keyword`` below.
@@ -2092,10 +2153,9 @@ class JsonRpcServer(
         ``preview`` (5.6) is the delete preview: ONE extra plain line saying how much
         a delete would take, computed by looking and never by running anything
         (``agent_core/delete_preview.py``). It rides in its own card field rather
-        than inside ``description``, because the frontend splits that string on the
-        ``run: `` prefix to draw the command as a machine fact, text appended there
-        would be rendered as part of the command. Absent on every other card, which
-        is every card the app showed before 5.6.
+        than inside ``description`` because it is prose ABOUT the command and must
+        never be read as part of it. Absent on every other card, which is every card
+        the app showed before 5.6.
 
         A STOPPED TURN NEVER GETS A CARD. The worker keeps running after Stop (there
         is no mid-step interrupt in v1), so without this check the turn's next tool
@@ -2106,16 +2166,7 @@ class JsonRpcServer(
         if self._stopped():
             return PermissionStatus.DENIED
         tool = self.tool_registry.get(tool_id)
-        definition = tool.definition
-        description = _card_consequence(tool, detail)
-        card = {
-            "toolId": tool_id,
-            "label": definition.label,
-            "description": description,
-            "riskTier": definition.risk_tier.value,
-        }
-        if preview:
-            card["preview"] = preview
+        card = build_permission_card(tool, detail, preview)
         if arming is not None:
             return self._ask_with_keyword(tool_id, card, arming)
         allow, _ = self._ask_once(tool_id, card)
