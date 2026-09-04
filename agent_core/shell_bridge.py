@@ -72,6 +72,13 @@ class ServerShellBridge(ShellBridge, Protocol):
     # a file dialog on screen and read whatever came back.
     def pick_knowledge_document(self, suggested_path: str | None) -> dict: ...
 
+    # ...and the question the stored path is FOR: has this document changed since
+    # Addison read it? Declared here beside its picker rather than on ``ShellBridge``
+    # for the same reason ``digest_workspace_files`` is — it reads no byte across the
+    # bridge, but a tool that could ask it path by path would be a
+    # does-this-file-exist oracle pointed anywhere.
+    def digest_knowledge_documents(self, paths: list[str]) -> dict: ...
+
     # The review surface's read paths (Phase-3 plan Build §1). They are declared HERE
     # and not on ``ShellBridge`` for the reason that Protocol's own docstring gives —
     # it is "exactly the surface the v1 tools need", and no tool may ever have these.
@@ -108,6 +115,20 @@ _DEFAULT_TIMEOUT = 60.0
 # password they eventually type lands on a request nobody is waiting on, so the turn
 # fails anyway AND the shell's answer is thrown away. Human-paced, therefore.
 _KEYCHAIN_TIMEOUT = 600.0
+
+# ...and a picker is not the shell's own answer to give either. THE SAME ARGUMENT,
+# reached from the other side: a native file dialog waits on a PERSON, who may be
+# looking for the file in another folder, reading the name of it, or away from the
+# keyboard entirely. Giving up at sixty seconds does not close the dialog — it only
+# guarantees that the document they eventually choose is read, hashed, sent, and
+# dropped, while the panel that asked has already shown a failure. Human-paced,
+# therefore, on `_KEYCHAIN_TIMEOUT`'s reasoning exactly.
+#
+# ON THE DOCUMENT PICKER ONLY, today. `pick_file` and `pick_directory` wait on a
+# person too and are still on the default budget; moving them is a separate call with
+# its own callers to check, and `tests/test_shell_bridge.py`'s table is where that
+# decision is visible rather than implied.
+_PICKER_TIMEOUT = 600.0
 
 # ...and a ``shell.runCommand`` waits on the COMMAND's budget, not the shell's own
 # responsiveness. The shell kills the child at the timeout it was given and answers,
@@ -343,7 +364,7 @@ class IpcShellBridge:
 
         A PATH COMES BACK, unlike ``pick_file``'s opaque handle, and the difference is
         the whole design. The core stores that path so it can later ask the shell for
-        a DIGEST of it (``digest_workspace_files``) and say "this file has changed
+        a DIGEST of it (``digest_knowledge_documents``) and say "this file has changed
         since Addison read it". It never asks for the CONTENT of a path: re-reading
         opens this picker again, pointed at the file, and the person confirms. A
         path-based content read would hand the core a read-any-file capability, and
@@ -358,11 +379,34 @@ class IpcShellBridge:
         which the caller matches on — and when the shell refuses the file it was
         given: too big, not an ordinary file, not UTF-8 text, or inside Addison's own
         data directory. Each of those arrives as one plain sentence written for the
-        person, which the caller shows untouched."""
+        person, which the caller shows untouched.
+
+        ``_PICKER_TIMEOUT``, not the default budget: a dialog waits on a person, and
+        the constant's own comment says why that is not the same thing as a wedged
+        shell. Past even that, the raise is a ``ShellCallTimeout`` and the caller says
+        so in its own sentence rather than relaying "Addison couldn't finish that"."""
         params: dict = {}
         if suggested_path:
             params["suggestedPath"] = suggested_path
-        return self._call(Method.SHELL_PICK_KNOWLEDGE_DOCUMENT, params)
+        return self._call(
+            Method.SHELL_PICK_KNOWLEDGE_DOCUMENT, params, timeout=_PICKER_TIMEOUT
+        )
+
+    def digest_knowledge_documents(self, paths: list[str]) -> dict:
+        """``{digests: {<path>: {sha256: str|null, missing: bool}}}`` for up to two
+        hundred documents at once.
+
+        ``digest_workspace_files`` WITH THE OTHER CEILING, and that is the whole of the
+        difference. That method stops at 256 KB per file, which is the size class of
+        file ADDISON wrote; a document a person picked is admitted up to 2 MB, so
+        asking the review surface's question of one answered "can't tell" for anything
+        larger — and "can't tell" is what the panel renders as no Update button at all.
+        Same batch cap, same promise that it never fails a file: an unreadable
+        document is one null among the others, not an error.
+
+        DEFAULT BUDGET, unlike the picker above: nobody is in front of this one. It is
+        the shell hashing files out of its own process, bounded by its own ceilings."""
+        return self._call(Method.SHELL_DIGEST_KNOWLEDGE_DOCUMENTS, {"paths": list(paths)})
 
     def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
         # undo of write_workspace_file: put prior bytes back, or DELETE when None (the

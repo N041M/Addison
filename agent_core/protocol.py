@@ -617,6 +617,13 @@ class Method:
     # Addison's own data dir, a non-regular file, anything over 2 MB, and bytes that
     # are not UTF-8 — each in its own plain sentence the core relays untouched.
     SHELL_PICK_KNOWLEDGE_DOCUMENT = "shell.pickKnowledgeDocument"
+    # {paths} -> {digests: {<path>: {sha256|null, missing}}}. "Has this document
+    # changed since Addison read it?", asked of the size class of file a PERSON picks
+    # — up to 2 MB, where `shell.digestWorkspaceFiles` stops at 256 KB because that is
+    # the size class of file Addison itself wrote. Sharing that method meant sharing
+    # its smaller ceiling, so every document over 256 KB answered "can't tell" and the
+    # panel offered no Update after an edit. Same batch cap, same never-fails shape.
+    SHELL_DIGEST_KNOWLEDGE_DOCUMENTS = "shell.digestKnowledgeDocuments"
     # The review surface's read paths (Phase-3 plan Build §1), reached ONLY from
     # `workspace.listDirectory` / `workspace.readFile` — never from a tool. The shell
     # opens both with its own data-dir floor, lists with `symlink_metadata` (a link is

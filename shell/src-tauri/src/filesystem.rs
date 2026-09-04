@@ -127,6 +127,44 @@ const PICKED_FILE_SIZE_BOUND: u64 = 1024 * 1024;
 /// Kept a whole number of MB: the sentence names it in MB and derives it from here.
 const KNOWLEDGE_DOCUMENT_SIZE_BOUND: u64 = 2 * 1024 * 1024;
 
+/// How much of ONE knowledge document the shell will read in order to hash it
+/// (`shell.digestKnowledgeDocuments`, knowledge phase 3).
+///
+/// ITS OWN CONSTANT, though it equals `KNOWLEDGE_DOCUMENT_SIZE_BOUND` today, on
+/// `VIEW_SIZE_BOUND`'s precedent — and like that one it is a DERIVATION rather than a
+/// coincidence. The property is: **any document Addison could have added is a document
+/// Addison can tell you has changed.** `DIGEST_SIZE_BOUND` is 256 KB because that is
+/// the size class of file the REVIEW surface can be asked about — a file Addison itself
+/// wrote — and a document a person picks is admitted up to 2 MB. Asking the review
+/// surface's question of a knowledge document answered `sha256: null` for everything
+/// over 256 KB, which the core reads as "can't tell", so "This file has changed since
+/// Addison read it" was unreachable for eight documents in nine and no Update was ever
+/// offered. The assertion below holds the two together.
+const KNOWLEDGE_DIGEST_SIZE_BOUND: u64 = KNOWLEDGE_DOCUMENT_SIZE_BOUND;
+
+/// THE RELATION, not the numbers, and checked at COMPILE TIME rather than by a test —
+/// this is a fact about two constants, so it should stop a build rather than fail a
+/// run. The two are free to move; what may never happen again is the digest ceiling
+/// sitting BELOW the ceiling on what a person may add, because that gap is invisible.
+/// It costs no error and no log line — only an Update button that is never offered,
+/// for exactly the documents most likely to have been edited.
+const _: () = assert!(
+    KNOWLEDGE_DIGEST_SIZE_BOUND >= KNOWLEDGE_DOCUMENT_SIZE_BOUND,
+    "a document Addison will ADD must be one it can HASH, or \"this file has changed \
+     since Addison read it\" is unreachable for the difference"
+);
+
+/// What every picker says when somebody closes it without choosing.
+///
+/// ONE CONSTANT because it is MATCHED ON, not merely shown. The core tells a
+/// cancellation from a refusal by comparing this sentence with
+/// `shell_bridge.PICKER_CANCELLED` (`rpc/knowledge.py`): a cancel shows the person
+/// nothing at all, a refusal shows the shell's own words. Four copies of the sentence
+/// meant that rewording one of them left both test suites green and turned somebody
+/// closing a dialog into an error line. `the_cancel_sentence_matches_the_core_constant`
+/// pins this string against the Python file that reads it.
+const PICKER_CANCELLED: &str = "You closed the picker without choosing.";
+
 /// What a document that is not text gets told. Plain text and Markdown are where
 /// nothing is guessed; PDF and Word extraction is lossy, and a table flattened into
 /// prose retrieves as nonsense (the plan's §7 says so out loud), so the honest answer
@@ -347,6 +385,11 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         // what it pre-fills — it grants nothing, and what comes back is whatever the
         // person actually chose.
         "shell.pickKnowledgeDocument" => pick_knowledge_document(app, params).await,
+        // "Has this document changed since Addison read it?", for the size class of
+        // file a person may pick — `digestWorkspaceFiles`'s question with the ceiling
+        // that matches (see `KNOWLEDGE_DIGEST_SIZE_BOUND`). Reads no byte across the
+        // bridge and never fails a batch, exactly as its sibling does not.
+        "shell.digestKnowledgeDocuments" => digest_knowledge_documents(params),
         // The review surface's READ paths (phase-3 plan Build §1). A person clicking a
         // folder is not the model acting, so these are reached from a `workspace.*` RPC
         // and never from a registry tool — the core confines which paths arrive
@@ -408,7 +451,7 @@ async fn save_new_file(app: &AppHandle, params: &Value) -> Result<Value, RpcErro
 
     let picked: Option<PathBuf> =
         on_main(app, move || rfd::FileDialog::new().set_file_name(filename).save_file()).await?;
-    let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
+    let path = picked.ok_or_else(|| RpcError::app(PICKER_CANCELLED))?;
 
     create_new_and_write(
         &path,
@@ -482,7 +525,7 @@ fn restore_deleted_path(state: &FileState, path: PathBuf, content: &str) -> Resu
 async fn pick_file(app: &AppHandle) -> Result<Value, RpcError> {
     let picked: Option<PathBuf> =
         on_main(app, move || rfd::FileDialog::new().pick_file()).await?;
-    let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
+    let path = picked.ok_or_else(|| RpcError::app(PICKER_CANCELLED))?;
 
     let handle = uuid::Uuid::new_v4().to_string();
     lock(&app.state::<FileState>().handles).insert(handle.clone(), path);
@@ -499,7 +542,7 @@ async fn pick_file(app: &AppHandle) -> Result<Value, RpcError> {
 async fn pick_directory(app: &AppHandle) -> Result<Value, RpcError> {
     let picked: Option<PathBuf> =
         on_main(app, move || rfd::FileDialog::new().pick_folder()).await?;
-    let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
+    let path = picked.ok_or_else(|| RpcError::app(PICKER_CANCELLED))?;
     Ok(json!({ "path": path.to_string_lossy() }))
 }
 
@@ -538,7 +581,7 @@ async fn pick_knowledge_document(app: &AppHandle, params: &Value) -> Result<Valu
         dialog.pick_file()
     })
     .await?;
-    let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
+    let path = picked.ok_or_else(|| RpcError::app(PICKER_CANCELLED))?;
     read_knowledge_document(&path)
 }
 
@@ -1171,7 +1214,7 @@ fn adopt_workspace_path_in(state: &FileState, params: &Value) -> Result<Value, R
     // The same read, the same ceiling and the same "can't tell" as the surface's own
     // digest, one hashing path in this file, so a file this cannot judge is a file the
     // surface already says it cannot judge.
-    let digest = digest_workspace_path(&path);
+    let digest = digest_workspace_path(&path, DIGEST_SIZE_BOUND);
     let matches = digest
         .get("sha256")
         .and_then(Value::as_str)
@@ -1206,16 +1249,51 @@ fn digest_workspace_files(params: &Value) -> Result<Value, RpcError> {
         .and_then(Value::as_array)
         .ok_or_else(|| RpcError::app("A list of file paths is required."))?;
     refuse_oversize_batch(paths)?;
+    Ok(json!({ "digests": digest_each(paths, DIGEST_SIZE_BOUND) }))
+}
+
+// shell.digestKnowledgeDocuments {paths} -> {digests: {<path>: {sha256, missing}}}
+//
+// THE SAME QUESTION ABOUT A DIFFERENT SIZE CLASS OF FILE (knowledge phase 3). "Your
+// documents" asks it of a file a PERSON picked, admitted up to
+// `KNOWLEDGE_DOCUMENT_SIZE_BOUND`; `digestWorkspaceFiles` asks it of a file ADDISON
+// wrote, which cannot be bigger than `DIGEST_SIZE_BOUND`. Sharing the method meant
+// sharing the smaller ceiling, so every document over 256 KB came back
+// `sha256: null` — "Addison can't tell" — and the panel said "Ready" forever after
+// somebody edited the file, with no Update offered. The bound is the only difference;
+// everything else here is `digest_workspace_files`, including the batch cap and the
+// promise that this never fails.
+//
+// A SECOND METHOD rather than a `bound` on the wire, deliberately: a ceiling the CORE
+// names is a ceiling the core can raise, and this file owns its bounds (that is the
+// whole of `MAX_BATCH_PATHS`'s doc comment). Two methods means two fixed numbers,
+// each chosen here for a stated reason.
+fn digest_knowledge_documents(params: &Value) -> Result<Value, RpcError> {
+    let paths = params
+        .get("paths")
+        .and_then(Value::as_array)
+        .ok_or_else(|| RpcError::app("A list of file paths is required."))?;
+    refuse_oversize_batch(paths)?;
+    Ok(json!({ "digests": digest_each(paths, KNOWLEDGE_DIGEST_SIZE_BOUND) }))
+}
+
+/// The loop both batch methods run, with the ceiling each of them chose.
+fn digest_each(paths: &[Value], bound: u64) -> serde_json::Map<String, Value> {
     let mut digests = serde_json::Map::new();
     for entry in paths {
         if let Some(path) = entry.as_str() {
-            digests.insert(path.to_string(), digest_workspace_path(Path::new(path)));
+            digests.insert(path.to_string(), digest_workspace_path(Path::new(path), bound));
         }
     }
-    Ok(json!({ "digests": digests }))
+    digests
 }
 
 /// One file's answer: `{sha256: <hex> | null, missing: bool}`.
+///
+/// `bound` is HOW MUCH the caller is willing to read for its one-word answer, and it
+/// is a parameter because the two callers are asked about different size classes of
+/// file — see `KNOWLEDGE_DIGEST_SIZE_BOUND`. It is never a number that crossed the
+/// bridge: both call sites pass a constant from this file.
 ///
 /// NEVER AN ERROR, whatever happens. One unreadable file among two hundred must not
 /// take the other hundred and ninety-nine off the screen, and every failure here has
@@ -1225,7 +1303,7 @@ fn digest_workspace_files(params: &Value) -> Result<Value, RpcError> {
 /// `missing` is separated from `null` because the two mean different things to the
 /// person: a file that is GONE is a fact worth showing (Revert can still put it back),
 /// while a file that cannot be judged is a warning to withhold.
-fn digest_workspace_path(path: &Path) -> Value {
+fn digest_workspace_path(path: &Path, bound: u64) -> Value {
     // The floor, first and unchanged: Addison's own data directory is not a place the
     // harness may ask questions about either. A refusal is folded into the ordinary
     // "can't tell" answer rather than raised, because this method never fails a batch.
@@ -1252,7 +1330,7 @@ fn digest_workspace_path(path: &Path) -> Value {
     if refuse_non_regular_file(&meta).is_err() {
         return unknowable_digest();
     }
-    if meta.len() > DIGEST_SIZE_BOUND {
+    if meta.len() > bound {
         return unknowable_digest();
     }
     let file = match std::fs::File::open(path) {
@@ -1266,7 +1344,7 @@ fn digest_workspace_path(path: &Path) -> Value {
     // this read cannot cost this process more than one chunk, and one that crosses the
     // bound while being read is answered "can't tell" rather than hashed in part — a
     // hash of half a file is not a wrong answer, it is a confident one.
-    let mut reader = file.take(DIGEST_SIZE_BOUND + 1);
+    let mut reader = file.take(bound + 1);
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut total: u64 = 0;
@@ -1275,7 +1353,7 @@ fn digest_workspace_path(path: &Path) -> Value {
             Ok(0) => break,
             Ok(read) => {
                 total += read as u64;
-                if total > DIGEST_SIZE_BOUND {
+                if total > bound {
                     return unknowable_digest();
                 }
                 hasher.update(&buffer[..read]);
@@ -3415,7 +3493,7 @@ mod tests {
         let path = temp_path();
         std::fs::write(&path, "hello\n").expect("seed");
 
-        let answer = digest_workspace_path(&path);
+        let answer = digest_workspace_path(&path, DIGEST_SIZE_BOUND);
         assert_eq!(
             answer.get("sha256").and_then(Value::as_str),
             Some("5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03")
@@ -3431,13 +3509,13 @@ mod tests {
         // A file that is GONE is a fact (Revert can still put it back); a file too big
         // to judge is a warning to withhold, and it is `null` rather than a guess.
         let gone = temp_path();
-        let missing = digest_workspace_path(&gone);
+        let missing = digest_workspace_path(&gone, DIGEST_SIZE_BOUND);
         assert_eq!(missing.get("missing").and_then(Value::as_bool), Some(true));
         assert!(missing.get("sha256").expect("present").is_null());
 
         let big = temp_path();
         std::fs::write(&big, "a".repeat(DIGEST_SIZE_BOUND as usize + 1)).expect("seed oversize");
-        let over = digest_workspace_path(&big);
+        let over = digest_workspace_path(&big, DIGEST_SIZE_BOUND);
         assert!(
             over.get("sha256").expect("present").is_null(),
             "a file past the bound is unjudgeable, never hashed in part"
@@ -3448,7 +3526,7 @@ mod tests {
         // ceiling from silently becoming "never answers for anything real".
         let at_bound = temp_path();
         std::fs::write(&at_bound, "a".repeat(DIGEST_SIZE_BOUND as usize)).expect("seed at bound");
-        let judged = digest_workspace_path(&at_bound);
+        let judged = digest_workspace_path(&at_bound, DIGEST_SIZE_BOUND);
         assert!(judged.get("sha256").and_then(Value::as_str).is_some());
 
         let _ = std::fs::remove_file(&big);
@@ -3468,7 +3546,7 @@ mod tests {
         let prev = std::env::var("ADDISON_DB_PATH").ok();
         std::env::set_var("ADDISON_DB_PATH", &secret);
 
-        let answer = digest_workspace_path(&secret);
+        let answer = digest_workspace_path(&secret, DIGEST_SIZE_BOUND);
         assert!(answer.get("sha256").expect("present").is_null());
         assert_eq!(answer.get("missing").and_then(Value::as_bool), Some(false));
 
@@ -3534,7 +3612,7 @@ mod tests {
         // The DIGEST never fails a batch, so its refusal is the ordinary "can't tell" —
         // and `missing: false`, because a pipe is not a file that is gone.
         let path = fifo.clone();
-        let answer = within_two_seconds(move || digest_workspace_path(&path));
+        let answer = within_two_seconds(move || digest_workspace_path(&path, DIGEST_SIZE_BOUND));
         assert!(answer.get("sha256").expect("present").is_null(), "digestWorkspaceFiles");
         assert_eq!(answer.get("missing").and_then(Value::as_bool), Some(false));
 
@@ -3649,7 +3727,8 @@ mod tests {
         let dir = temp_dir_path();
         assert_eq!(read_workspace_path(&dir).unwrap_err().message, NOT_A_REGULAR_FILE);
         assert_eq!(read_workspace_view(&dir).unwrap_err().message, NOT_A_REGULAR_FILE);
-        assert!(digest_workspace_path(&dir).get("sha256").expect("present").is_null());
+        let dir_digest = digest_workspace_path(&dir, DIGEST_SIZE_BOUND);
+        assert!(dir_digest.get("sha256").expect("present").is_null());
 
         let plain = dir.join("ordinary.txt");
         std::fs::write(&plain, "hello").expect("seed");
@@ -3658,7 +3737,8 @@ mod tests {
             Some("hello"),
             "an ordinary file must be unaffected by the kind check"
         );
-        assert!(digest_workspace_path(&plain).get("sha256").expect("present").is_string());
+        let plain_digest = digest_workspace_path(&plain, DIGEST_SIZE_BOUND);
+        assert!(plain_digest.get("sha256").expect("present").is_string());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3739,11 +3819,15 @@ mod tests {
             Some(MAX_BATCH_PATHS)
         );
 
-        // One over, and both refuse — with the number named in the sentence, derived
-        // from the constant so the two cannot drift.
+        // One over, and all three refuse — with the number named in the sentence,
+        // derived from the constant so the two cannot drift.
         for err in [
             can_restore_workspace_paths(&state, &json!({ "paths": over_cap.clone() })).unwrap_err(),
-            digest_workspace_files(&json!({ "paths": over_cap })).unwrap_err(),
+            digest_workspace_files(&json!({ "paths": over_cap.clone() })).unwrap_err(),
+            // The knowledge digest is the third batch question and takes the same
+            // ceiling: it is the same loop over the same stats and opens, awaited the
+            // same way, and only the per-file size bound differs.
+            digest_knowledge_documents(&json!({ "paths": over_cap })).unwrap_err(),
         ] {
             assert_eq!(err.code, -32000);
             assert_eq!(err.message, "Addison can only look at 200 files at once.");
@@ -3770,5 +3854,96 @@ mod tests {
             .is_some());
 
         let _ = std::fs::remove_file(&there);
+    }
+
+    // --- "Has this document changed?", at the size class a person may pick ---------
+
+    #[test]
+    fn a_document_at_the_knowledge_ceiling_can_still_be_told_apart_from_a_changed_one() {
+        // THE BUG THIS CLOSES, and it was silent. "Your documents" asked the REVIEW
+        // surface's digest question, whose ceiling is 256 KB because that is the size
+        // class of file ADDISON wrote — while the picker admits 2 MB. So every
+        // document over 256 KB came back `sha256: null`, which the core reads as
+        // "unknown", and the panel said "Ready" forever after somebody edited the file
+        // with no Update button anywhere. Nothing failed; the answer was just never
+        // available.
+        //
+        // Mutation: pass `DIGEST_SIZE_BOUND` in `digest_knowledge_documents` and this
+        // fails — the digest comes back null for a document Addison would happily add.
+        let path = temp_path();
+        std::fs::write(&path, "a".repeat(KNOWLEDGE_DOCUMENT_SIZE_BOUND as usize))
+            .expect("seed a document at the ceiling");
+
+        let params = json!({ "paths": [path.to_string_lossy()] });
+        let answer = digest_knowledge_documents(&params).unwrap();
+        let entry = answer
+            .get("digests")
+            .and_then(Value::as_object)
+            .and_then(|map| map.get(&path.to_string_lossy().to_string()))
+            .expect("an answer for the path it was asked about")
+            .clone();
+        assert!(
+            entry.get("sha256").and_then(Value::as_str).is_some(),
+            "a document Addison can ADD must be one Addison can tell you has CHANGED"
+        );
+        assert_eq!(entry.get("missing").and_then(Value::as_bool), Some(false));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_file_past_the_knowledge_ceiling_is_answered_cannot_tell_and_never_hashed() {
+        // The other half, so the bound above is a ceiling and not an absence of one.
+        // `null` and never a refusal: "Addison can't tell whether this changed" is a
+        // true sentence, and one unjudgeable file must not take a list off the screen.
+        //
+        // Mutation: pass a bigger bound at the call site (`digest_each(paths,
+        // u64::MAX / 2)`) and this fails — the file is hashed. NOT killed by RAISING
+        // `KNOWLEDGE_DIGEST_SIZE_BOUND`, and that is worth writing down rather than
+        // pretending otherwise: the fixture is derived from the constant, so moving
+        // the constant moves the fixture with it. What this test can prove is that a
+        // ceiling is APPLIED here; what the constant should BE is the compile-time
+        // assertion beside it.
+        let path = temp_path();
+        std::fs::write(&path, "a".repeat(KNOWLEDGE_DIGEST_SIZE_BOUND as usize + 1))
+            .expect("seed one byte over");
+
+        let params = json!({ "paths": [path.to_string_lossy()] });
+        let answer = digest_knowledge_documents(&params).unwrap();
+        let entry = answer
+            .get("digests")
+            .and_then(Value::as_object)
+            .and_then(|map| map.get(&path.to_string_lossy().to_string()))
+            .expect("an answer for the path it was asked about")
+            .clone();
+        assert!(entry.get("sha256").expect("present").is_null());
+        assert_eq!(entry.get("missing").and_then(Value::as_bool), Some(false));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_cancel_sentence_matches_the_core_constant() {
+        // A STRING MATCHED ACROSS TWO LANGUAGES. `rpc/knowledge.py` tells a person
+        // CLOSING a picker from the shell REFUSING their file by comparing this exact
+        // sentence with `shell_bridge.PICKER_CANCELLED` — a cancel shows nothing at
+        // all, a refusal shows the shell's own words. Nothing in either suite links
+        // the two: rewording this side alone leaves `cargo test` and `pytest` green
+        // and turns every cancelled pick into an error line under somebody's Add
+        // button. So the pin is here, where the sentence is written.
+        //
+        // Mutation: reword `PICKER_CANCELLED` on either side and this fails.
+        //
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored search
+        // over the raw bytes finds nothing there. `.gitattributes` also pins the
+        // checkout to LF; this line is what keeps the pin from being the only thing
+        // standing between the gate and a silent pass.
+        let core = include_str!("../../../agent_core/shell_bridge.py").replace("\r\n", "\n");
+        let expected = format!("PICKER_CANCELLED = \"{PICKER_CANCELLED}\"\n");
+        assert!(
+            core.contains(&expected),
+            "agent_core/shell_bridge.py must define PICKER_CANCELLED as this file's \
+             sentence, or a cancelled picker reads as a failure. Looked for:\n{expected}"
+        );
     }
 }

@@ -423,6 +423,11 @@ export const Method = {
   // method that reads a document by path afterwards, which is what keeps "the
   // core may not read any file it names" true while a knowledge base exists.
   ShellPickKnowledgeDocument: "shell.pickKnowledgeDocument",
+  // "Has this document changed since Addison read it?" — the same question
+  // `shell.digestWorkspaceFiles` answers, at the size class of file a person may
+  // pick (2 MB, where that one stops at 256 KB). Core -> Shell only; the window
+  // never calls it.
+  ShellDigestKnowledgeDocuments: "shell.digestKnowledgeDocuments",
   // The review surface's read paths (Phase 3). Reached only from the core's
   // `workspace.listDirectory` / `workspace.readFile`, never from here.
   ShellListWorkspaceDirectory: "shell.listWorkspaceDirectory",

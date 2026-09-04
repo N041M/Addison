@@ -12,7 +12,8 @@
 //     event; `keychain.*` and `shell.runCommand` are handled OFF the loop (see
 //     `dispatch_off_loop`) because both can hold their handler for a long time — the
 //     OS can put a modal password dialog in front of one, and the other is a whole
-//     command's runtime;
+//     command's runtime; the three NATIVE FILE DIALOGS are taken off it too (see
+//     `dispatch_dialog_off_loop`), because each of them waits on a person;
 //   - on unexpected exit, tell the user in plain language and respawn ONCE.
 
 use std::path::PathBuf;
@@ -155,6 +156,12 @@ async fn handle_line(app: &AppHandle, stdin_state: &CoreStdin, line: String) {
     if dispatch_off_loop(stdin_state, &frame) {
         return;
     }
+    // ...and the native dialogs second, for the same reason and by a different route:
+    // they need the `AppHandle` the sync dispatcher above deliberately does without,
+    // so they are spawned rather than called (see `dispatch_dialog_off_loop`).
+    if dispatch_dialog_off_loop(app, stdin_state, &frame) {
+        return;
+    }
 
     match frame.get("method").and_then(Value::as_str) {
         Some(method) if ipc::is_shell_bound(method) => {
@@ -266,6 +273,73 @@ fn dispatch_off_loop(stdin_state: &CoreStdin, frame: &Value) -> bool {
         return true;
     }
     false
+}
+
+/// The three native file dialogs. Every one of them ends in an `rfd` call on the main
+/// thread and does not return until a PERSON answers it.
+const PICK_FILE: &str = "shell.pickFile";
+const PICK_DIRECTORY: &str = "shell.pickDirectory";
+const PICK_KNOWLEDGE_DOCUMENT: &str = "shell.pickKnowledgeDocument";
+
+/// Whether a method opens one of those dialogs. Split out from the dispatcher below
+/// so the MEMBERSHIP is testable without an `AppHandle`: nothing in a unit test can
+/// build one, and the set is the half of this decision that gets edited.
+fn is_native_dialog(method: &str) -> bool {
+    matches!(method, PICK_FILE | PICK_DIRECTORY | PICK_KNOWLEDGE_DOCUMENT)
+}
+
+/// The SECOND dispatcher off the pump, for the frames that must not be awaited on it
+/// AND need the `AppHandle` that `dispatch_off_loop` deliberately does without.
+/// Returns true when the frame was claimed.
+///
+/// **THE SAME FAILURE AS `dispatch_off_loop`'s, through a door that was thought to be
+/// safe.** This file used to say a picker "is fast" and left all three on the pump.
+/// A dialog is not fast: it is a person deciding, and while one is open no further
+/// line of the core's stdout is read at all. Every Core->Frontend frame stalls behind
+/// it, and — measured with `knowledge.list`, which asks this process to digest every
+/// stored path from a worker thread — a Core->Shell request made WHILE the dialog is
+/// up cannot be answered either, so it dies at the core bridge's sixty-second ceiling
+/// and parks that worker for a minute. The dialog itself is blameless; awaiting it
+/// here was the bug.
+///
+/// A SEPARATE FUNCTION rather than an arm of `dispatch_off_loop`, because that one is
+/// sync and `AppHandle`-free on purpose — that is what lets
+/// `a_long_command_does_not_block_the_next_request` drive the real dispatcher and
+/// assert on the CLOCK. These handlers are `async` (the dialog is hopped onto the main
+/// thread by `on_main`) and take the handle, so they are spawned on the async runtime
+/// instead of run on a blocking one.
+///
+/// Responses may complete out of order — one person can leave a dialog open while
+/// another request finishes. That is fine, and it is the same answer `spawn_request`
+/// gives: JSON-RPC ids correlate them core-side.
+fn dispatch_dialog_off_loop(app: &AppHandle, stdin_state: &CoreStdin, frame: &Value) -> bool {
+    let Some(method) = frame.get("method").and_then(Value::as_str) else {
+        return false;
+    };
+    if !is_native_dialog(method) {
+        return false;
+    }
+    let id = frame.get("id").cloned().unwrap_or(Value::Null);
+    let params = frame.get("params").cloned().unwrap_or(Value::Null);
+    let method = method.to_string();
+    let app = app.clone();
+    let stdin_state = stdin_state.clone();
+    tauri::async_runtime::spawn(async move {
+        // The generation is captured BEFORE the dialog opens, exactly as
+        // `spawn_request` does and for the identical reason: a person can stand in
+        // front of a picker for longer than a core takes to die and respawn, and the
+        // new core's ids start again at `core-req-1`.
+        let generation = stdin_state.0.lock().await.generation;
+        let outcome = filesystem::handle(&app, &method, &params).await;
+
+        let mut channel = stdin_state.0.lock().await;
+        if channel.generation != generation {
+            eprintln!("[addison] dropped a picker answer for a core that has exited");
+            return;
+        }
+        write_to_channel(&mut channel, &response_frame(id, outcome)).await;
+    });
+    true
 }
 
 /// Run one Core->Shell request on a blocking task and write its response back when
@@ -445,6 +519,24 @@ mod tests {
             "dispatch_off_loop must be consulted BEFORE the inline await, or the \
              claim off it is worthless:\n{body}"
         );
+
+        // THE SECOND DISPATCHER, pinned the same way and for the same reason. Its
+        // own membership is asserted below against `is_native_dialog`, which is a
+        // property of the function and NOT of the pump — commenting this call out of
+        // `handle_line` sends all three dialogs straight back to the inline await,
+        // where a person deciding at a file chooser holds every frame in the app,
+        // and every other test here stays green. It cannot be driven at runtime: the
+        // spawn needs an `AppHandle`, which no unit test can build.
+        let dialogs = body.find("dispatch_dialog_off_loop(app").expect(
+            "handle_line must CALL dispatch_dialog_off_loop — otherwise a native \
+             dialog is awaited on the core's read loop and stalls every frame while \
+             somebody decides",
+        );
+        assert!(
+            dialogs < awaited,
+            "dispatch_dialog_off_loop must be consulted BEFORE the inline await, or \
+             the claim off it is worthless:\n{body}"
+        );
     }
 
     // UNIX-ONLY FOR ITS STAND-IN, not for what it proves. The test needs a process
@@ -536,12 +628,51 @@ mod tests {
         assert!(dispatch_off_loop(&channel, &frame("shell.armAutomation")));
         assert!(dispatch_off_loop(&channel, &frame("shell.disarmAutomation")));
         assert!(dispatch_off_loop(&channel, &frame("shell.listArmed")));
-        // A picker or a file write is fast and needs the AppHandle, so it stays on
-        // the pump where its ordering is trivially the core's own.
+        // A file write or a clipboard read is the shell answering out of its own
+        // process, with nobody in the way, so it stays on the pump where its
+        // ordering is trivially the core's own.
         assert!(!dispatch_off_loop(&channel, &frame("shell.writeWorkspaceFile")));
         assert!(!dispatch_off_loop(&channel, &frame("shell.readClipboard")));
         // Core -> Frontend traffic is relayed, never handled.
         assert!(!dispatch_off_loop(&channel, &frame("conversation.messageDelta")));
         assert!(!dispatch_off_loop(&channel, &json!({ "jsonrpc": "2.0", "id": 1 })));
+    }
+
+    #[test]
+    fn every_native_dialog_is_taken_off_the_pump() {
+        // THE SECOND ROUTE'S MEMBERSHIP. This file used to say a picker "is fast" and
+        // awaited all three inline. A dialog is not fast — it is a person deciding —
+        // and while one is open the pump reads no further line of the core's stdout
+        // at all: every Core->Frontend frame stalls, and a Core->Shell request made
+        // meanwhile (`knowledge.list` digesting every stored path from a worker
+        // thread) cannot be answered either, so it dies at the core bridge's ceiling
+        // and parks that worker for a minute.
+        //
+        // Mutation: drop any one of the three from `is_native_dialog` and this fails,
+        // naming it.
+        assert!(is_native_dialog("shell.pickFile"));
+        assert!(is_native_dialog("shell.pickDirectory"));
+        assert!(is_native_dialog("shell.pickKnowledgeDocument"));
+
+        // The other half, and the half that keeps this from becoming "everything goes
+        // off the pump". These two answer from this process with nobody in the way, so
+        // moving them would cost the ordering the core relies on for nothing.
+        assert!(!is_native_dialog("shell.writeWorkspaceFile"));
+        assert!(!is_native_dialog("shell.readClipboard"));
+        // `shell.saveNewFile` opens a dialog too and is deliberately NOT here: it is
+        // reached from a tool, behind a permission card, and the turn that asked is
+        // already waiting on it — a separate call from this one, made visible rather
+        // than implied. If it moves, this line is the place to say so.
+        assert!(!is_native_dialog("shell.saveNewFile"));
+
+        // ...and the routes do not overlap: the sync dispatcher must not also claim a
+        // dialog, or it would run an async handler's work on a blocking task.
+        let channel = CoreStdin(Arc::new(Mutex::new(CoreChannel { stdin: None, generation: 0 })));
+        for method in ["shell.pickFile", "shell.pickDirectory", "shell.pickKnowledgeDocument"] {
+            assert!(
+                !dispatch_off_loop(&channel, &json!({"jsonrpc": "2.0", "id": 1, "method": method})),
+                "{method} belongs to the dialog route, not the blocking one"
+            );
+        }
     }
 }

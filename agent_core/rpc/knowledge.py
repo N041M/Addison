@@ -48,6 +48,7 @@ from uuid import uuid4
 from agent_core.knowledge.index import NOTHING_TO_INDEX, EmbeddingUnavailable
 from agent_core.rpc.base import ServerContext
 from agent_core.shell_bridge import PICKER_CANCELLED
+from agent_core.tools.base import ShellCallTimeout
 
 # --- Frozen plain-language copy (CLAUDE.md: no jargon, personas 54/68) --------
 
@@ -73,6 +74,27 @@ _DIFFERENT_FILE = "That's a different file. To add it as well, use Add a documen
 #: Addison, so pointing at Ollama would send them to fix something that is not broken.
 _CANNOT_ADD_DOCUMENTS = "Addison can't add documents just now. Restart Addison and try again."
 
+#: Said when nobody answered the picker inside the bridge's budget. It says what
+#: happened, what it did NOT do, and the one next step — and it names no ceiling, no
+#: thread and no number of seconds, because none of those is a thing the person can
+#: act on. ``rpc/workspace.py::_PICKER_TIMED_OUT``'s shape, deliberately: two dialogs
+#: that time out in two different voices would read as two different faults.
+#:
+#: ONLY EVER SENT FOR ``ShellCallTimeout``. Pressing Cancel still says nothing at all,
+#: which is right — the person already knows they pressed Cancel.
+_PICKER_TIMED_OUT = (
+    "Addison stopped waiting for the file picker, so nothing was chosen and nothing "
+    "changed. Open it again when you're ready."
+)
+
+#: How many paths one digest question may name. THE SHELL'S NUMBER, mirrored rather
+#: than imported (there is no import from Rust): ``MAX_BATCH_PATHS`` in
+#: ``shell/src-tauri/src/filesystem.rs`` refuses a batch bigger than this OUTRIGHT, so
+#: a person with two hundred and one documents would have seen "Addison can't tell"
+#: on every row rather than on none. ``test_the_digest_batch_matches_the_shells_cap``
+#: reads that file and fails if the two ever disagree.
+_MAX_DIGEST_BATCH = 200
+
 # --- What "on disk" can be. Computed live, never stored ----------------------
 #
 # NEVER A COLUMN. The answer is only true at the moment it is asked: a file changes
@@ -89,13 +111,13 @@ class KnowledgeMixin(ServerContext):
     def _knowledge_list(self) -> dict:
         """knowledge.list -> ``{documents: [<row>]}``, newest first.
 
-        ONE BATCHED DIGEST CALL for the whole list, never one per row: this answers a
-        panel opening, and a round trip per document would put a Core -> Shell hop
-        behind every line on the screen. The shell caps a batch at two hundred paths
-        and refuses past that — which lands here as "Addison can't tell" for every
-        row rather than as an error, because a list that will not load is worse than
-        a list that will not judge. A knowledge base that large is not a shape
-        anything here has seen; the day it is, this is the line to slice."""
+        ONE BATCHED DIGEST CALL per two hundred rows, never one per row: this answers
+        a panel opening, and a round trip per document would put a Core -> Shell hop
+        behind every line on the screen. Two hundred is the shell's own cap
+        (``_MAX_DIGEST_BATCH``), and it REFUSES a bigger batch rather than answering
+        part of it — so a list past that used to lose its "on disk" column entirely,
+        every row reading "Addison can't tell" while the shell could have judged all
+        of them. The slicing is in ``_knowledge_on_disk``."""
         self._ensure_built()
         return {"documents": self._knowledge_wire_rows(self.store.list_knowledge_documents())}
 
@@ -143,35 +165,52 @@ class KnowledgeMixin(ServerContext):
         unreadable, inside Addison's own data directory), or a malformed answer.
 
         NOTHING HERE RAISES. The list is what a person opens the panel to see, and a
-        file they moved to another disk must not be able to empty the screen."""
+        file they moved to another disk must not be able to empty the screen.
+
+        ``digest_knowledge_documents`` AND NOT ``digest_workspace_files``, which is the
+        same question at the wrong ceiling: that one stops at 256 KB — the size class
+        of file Addison itself WROTE — while a document a person picked is admitted up
+        to 2 MB. Every document over 256 KB therefore answered "can't tell", so the
+        panel said "Ready" forever after somebody edited one and never offered Update.
+
+        SLICED AT THE SHELL'S CAP. Past two hundred paths the shell refuses the whole
+        batch, deliberately (a partial answer is indistinguishable on screen from files
+        it genuinely could not judge), so the slicing has to be here. A refused or
+        broken slice costs its own rows their verdict and no others."""
         if not expected or self._shell_bridge is None:
             return {}
-        try:
-            answer = self._shell_bridge.digest_workspace_files(list(expected))
-        except Exception:
-            return {}
-        digests = answer.get("digests") if isinstance(answer, dict) else None
-        if not isinstance(digests, dict):
-            return {}
+        paths = list(expected)
         verdicts: dict[str, str] = {}
-        for path, indexed_digest in expected.items():
-            entry = digests.get(path)
-            if not isinstance(entry, dict):
+        for start in range(0, len(paths), _MAX_DIGEST_BATCH):
+            batch = paths[start : start + _MAX_DIGEST_BATCH]
+            try:
+                answer = self._shell_bridge.digest_knowledge_documents(batch)
+            except Exception:
                 continue
-            if entry.get("missing"):
-                verdicts[path] = _MISSING
+            digests = answer.get("digests") if isinstance(answer, dict) else None
+            if not isinstance(digests, dict):
                 continue
-            found = entry.get("sha256")
-            if not isinstance(found, str) or not found:
-                # The shell says it cannot tell. Neither can Addison, and saying
-                # "unchanged" here would be the one wrong answer of the four.
-                continue
-            verdicts[path] = _SAME if found == indexed_digest else _CHANGED
+            for path in batch:
+                entry = digests.get(path)
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("missing"):
+                    verdicts[path] = _MISSING
+                    continue
+                found = entry.get("sha256")
+                if not isinstance(found, str) or not found:
+                    # The shell says it cannot tell. Neither can Addison, and saying
+                    # "unchanged" here would be the one wrong answer of the four.
+                    continue
+                verdicts[path] = _SAME if found == expected[path] else _CHANGED
         return verdicts
 
     # --- the picker + the indexing run (OFF the worker; store-free) --------
     def _knowledge_pick_and_prepare(
-        self, doc_id: str | None, suggested_path: str | None
+        self,
+        doc_id: str | None,
+        suggested_path: str | None,
+        known_paths: frozenset[str] = frozenset(),
     ) -> tuple[dict | None, dict | None]:
         """Ask for a file, read it, chunk/screen/embed it. Returns ``(answer, job)``
         with exactly one of the two filled in: an answer to send back as it stands, or
@@ -182,11 +221,24 @@ class KnowledgeMixin(ServerContext):
         that a modal dialog somebody leaves open, and a local embedding run that takes
         a minute, block neither the read loop nor the worker. A ``sqlite3`` connection
         is usable only on the thread that opened it, so a single ``self.store`` here
-        would be a cross-thread database access — which is why every decision that
-        needs a row (is this a duplicate? is this still the same document?) is made in
-        ``_knowledge_commit`` instead. A structural test holds the line.
+        would be a cross-thread database access — which is why the AUTHORITATIVE
+        version of every decision that needs a row is made in ``_knowledge_commit``
+        instead. A structural test holds the line.
 
-        ``doc_id`` is None for an add and the row's id for a re-read.
+        **THE TWO REFUSALS ARE ASKED TWICE, EARLY AND LATE, AND THAT IS DELIBERATE.**
+        Both were only late, and both then paid for a refusal with the whole embedding
+        run: a document already in the list, and a re-read that came back pointing at a
+        different file, were each chunked, screened and embedded passage by passage —
+        a minute of a laptop's fan for an answer that was already knowable when the
+        dialog closed. So the facts the worker READ before the dialog opened are handed
+        in (``known_paths``, ``suggested_path``) and checked here first. They are
+        stale by construction — a picker can stand open for minutes — which is exactly
+        why the commit job asks again against a live row and wins. The early check
+        saves the work; the late one is the correctness.
+
+        ``doc_id`` is None for an add and the row's id for a re-read; ``known_paths``
+        is the set of paths already in the list, as of before the dialog opened, and is
+        consulted for an add only.
         """
         if self._shell_bridge is None:
             # No desktop shell means no picker, which is indistinguishable from a
@@ -194,11 +246,24 @@ class KnowledgeMixin(ServerContext):
             # the panel shows nothing at all rather than an error about plumbing.
             return {"ok": False, "cancelled": True}, None
         embedder = self._embedder_ref() if self._embedder_ref is not None else None
-        if embedder is None:
+        # AN EMBEDDER WITH NO MODEL NAME IS NOT AN EMBEDDER. Every vector is stored
+        # under the model that made it and `search_knowledge` reads back only its own
+        # model's rows, so a run under `""` would write a whole document's worth of
+        # vectors that no search can ever reach — indexed, reported "Ready", and
+        # invisible. That is a wiring fault in this process, not a missing Ollama, so
+        # it takes the "restart Addison" sentence and never the "install Ollama" one.
+        if embedder is None or not str(getattr(embedder, "model", "") or ""):
             return {"ok": False, "error": _CANNOT_ADD_DOCUMENTS}, None
 
         try:
             picked = self._shell_bridge.pick_knowledge_document(suggested_path)
+        except ShellCallTimeout:
+            # BEFORE the RuntimeError arm, because it IS one. Nobody answered the
+            # dialog inside the bridge's budget — which is not a refusal and not a
+            # cancellation, and relaying the bridge's own "Addison couldn't finish
+            # that just now" would describe a wedged shell rather than a dialog
+            # somebody walked away from.
+            return {"ok": False, "error": _PICKER_TIMED_OUT}, None
         except RuntimeError as exc:
             # MATCHED ON THE SENTENCE, which is why it is a shared constant: a
             # cancelled picker and a refused file arrive through the same channel,
@@ -212,6 +277,10 @@ class KnowledgeMixin(ServerContext):
         path = str(picked.get("path") or "")
         if not path:
             return {"ok": False, "cancelled": True}, None
+        if doc_id is None and path in known_paths:
+            return {"ok": False, "error": _ALREADY_ADDED}, None
+        if doc_id is not None and suggested_path and path != suggested_path:
+            return {"ok": False, "error": _DIFFERENT_FILE}, None
         job: dict[str, Any] = {
             "docId": doc_id or uuid4().hex,
             "reindex": doc_id is not None,
@@ -245,12 +314,16 @@ class KnowledgeMixin(ServerContext):
     def _knowledge_commit(self, params: dict) -> dict:
         """The ``knowledge_commit`` worker job: write what the thread prepared.
 
-        THE ROW IS RE-READ HERE, and every check that needs one lives here rather than
-        on the thread that did the reading. A modal picker can stand open for minutes:
-        between the click that opened it and this job, the document can have been
-        removed, or the same file added from another surface. Deciding from a row read
-        before the dialog opened would be deciding from a fact that had already
-        expired."""
+        THE ROW IS RE-READ HERE, and this is where the AUTHORITATIVE version of every
+        check that needs one lives. A modal picker can stand open for minutes: between
+        the click that opened it and this job, the document can have been removed, or
+        the same file added from another surface. Deciding from a row read before the
+        dialog opened would be deciding from a fact that had already expired.
+
+        The thread makes the same two judgements first, against what the worker read
+        before the dialog opened, and refuses there without embedding — see
+        ``_knowledge_pick_and_prepare``. That one saves a minute of work; this one is
+        what makes the answer true, and it wins if they ever disagree."""
         self._ensure_built()
         doc_id = str(params["docId"])
         path = str(params["path"])
@@ -301,12 +374,29 @@ class KnowledgeMixin(ServerContext):
         # row with its own Try again beside it.
         return {"ok": True, "document": self._knowledge_wire_rows([row])[0]}
 
+    # --- add: the store half, which runs first ----------------------------
+    def _knowledge_known_paths(self) -> frozenset[str]:
+        """Every path already in the list — a store read, so it runs on the worker
+        before the picker thread starts, exactly as ``_knowledge_reindex_target``
+        does for a re-read.
+
+        A SNAPSHOT, AND KNOWN TO BE ONE. It is read before the dialog opens and the
+        dialog can stand open for minutes, so a document added from another surface in
+        between is not in it. That is fine and it is the whole reason
+        ``_knowledge_commit`` asks the live store again: this set exists to stop
+        Addison spending a minute embedding a document it could already tell was a
+        duplicate, not to decide whether the write is allowed."""
+        self._ensure_built()
+        return frozenset(str(row["path"]) for row in self.store.list_knowledge_documents())
+
     # --- re-read: the store half, which runs first ------------------------
     def _knowledge_reindex_target(self, params: dict) -> tuple[dict | None, str, str]:
         """``(refusal, doc_id, path)`` for ``knowledge.reindex`` — a store read, so it
         runs on the worker before the picker thread starts. The path it returns is
         where the dialog opens and what it pre-fills; it is a suggestion, never a
-        permission, and ``_knowledge_commit`` checks what actually came back."""
+        permission. The thread compares it with what actually came back and refuses a
+        different file there, before any embedding; ``_knowledge_commit`` asks again
+        against the live row, and that answer is the one that decides."""
         self._ensure_built()
         doc_id = params.get("id")
         if not isinstance(doc_id, str) or not doc_id:

@@ -6,10 +6,12 @@ registered the tool; until this landed nothing could put a document into either.
 
 What these tests are about, in the order they appear:
 
-  (1) the LIST, and the four things "on disk" can be — computed live from one batched
-      digest call, never stored, and never able to fail the list;
+  (1) the LIST, and the four things "on disk" can be — computed live from batched
+      digest calls sliced at the shell's own cap, never stored, and never able to fail
+      the list;
   (2) ADDING, which is a picker, a chunk/screen/embed run and then a write, and every
-      way it can end: written, cancelled, already there, nothing in it, no local model;
+      way it can end: written, cancelled, already there, nothing in it, no local
+      model, nobody at the dialog;
   (3) RE-READING, which is the same picker pointed at the row — and refuses a
       different file rather than turning one document into another;
   (4) REMOVING, which takes the passages and their vectors with it;
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import re
 import sqlite3
 from pathlib import Path
 
@@ -78,7 +81,7 @@ def _document(path: str, text: str = _TEXT, *, display_name: str | None = None) 
 
 
 class _DocumentBridge(ShellBridgeStubs):
-    """The shell's half of the picker and of ``digestWorkspaceFiles``.
+    """The shell's half of the picker and of ``digestKnowledgeDocuments``.
 
     A fake because there is no shell in this process and no files on disk — and what
     is under test is the CORE's half: which sentence comes back, what gets written,
@@ -98,7 +101,7 @@ class _DocumentBridge(ShellBridgeStubs):
             raise answer
         return answer
 
-    def digest_workspace_files(self, paths: list[str]) -> dict:
+    def digest_knowledge_documents(self, paths: list[str]) -> dict:
         self.digest_calls.append(list(paths))
         return {"digests": {p: self.digests[p] for p in paths if p in self.digests}}
 
@@ -117,6 +120,27 @@ def _indexer(*, down: bool = False, model: str = "test-embed") -> KnowledgeIndex
         model=model,
         client=httpx.Client(transport=httpx.MockTransport(handler), base_url="http://local"),
     )
+
+
+class _SpyEmbedder:
+    """A real indexer with a counter in front of ``prepare``.
+
+    For the two tests whose subject is WORK THAT MUST NOT HAPPEN. Both refusals — a
+    duplicate, and a re-read that came back pointing somewhere else — answer the right
+    sentence whether or not the document was embedded first, so the sentence is not
+    the assertion. This is."""
+
+    def __init__(self, inner: KnowledgeIndexer) -> None:
+        self._inner = inner
+        self.prepared = 0
+
+    @property
+    def model(self) -> str:
+        return self._inner.model
+
+    def prepare(self, document_id: str, text: str):
+        self.prepared += 1
+        return self._inner.prepare(document_id, text)
 
 
 # The one ``type: ignore`` in this file, said once at the seam rather than at twenty
@@ -289,7 +313,7 @@ def test_a_shell_that_cannot_answer_never_empties_the_list(tmp_path):
     error frame with no documents in it."""
 
     class _BrokenDigest(_DocumentBridge):
-        def digest_workspace_files(self, paths: list[str]) -> dict:
+        def digest_knowledge_documents(self, paths: list[str]) -> dict:
             raise RuntimeError("Addison couldn't finish that just now. Please try again.")
 
     bridge = _BrokenDigest([_document(_TENANCY)])
@@ -328,6 +352,79 @@ def test_with_no_shell_at_all_the_list_still_answers(tmp_path):
         assert documents[0]["onDisk"] == "unknown"
     finally:
         _shutdown(h.reader, h.thread)
+
+
+def test_a_list_past_the_shells_batch_cap_still_judges_every_row(tmp_path):
+    """THE CEILING THAT TOOK THE WHOLE COLUMN WITH IT. The shell refuses a digest
+    batch of more than ``_MAX_DIGEST_BATCH`` paths OUTRIGHT — deliberately, because a
+    silently truncated answer is indistinguishable on screen from files it genuinely
+    could not judge — so one unsliced call for two hundred and one documents came back
+    an error, was folded into "Addison can't tell", and every row on the panel lost
+    its status sentence at once. Nothing failed; the list just stopped meaning
+    anything past a number nobody would notice crossing.
+
+    Mutation: delete the slicing loop in ``_knowledge_on_disk`` and pass ``paths``
+    whole — the fake below refuses, every row reads "unknown", and this fails."""
+    from agent_core.rpc.knowledge import _MAX_DIGEST_BATCH
+
+    class _CappedDigest(_DocumentBridge):
+        """The shell's own cap, and its own refusal, in the one line that matters."""
+
+        def digest_knowledge_documents(self, paths: list[str]) -> dict:
+            self.digest_calls.append(list(paths))
+            if len(paths) > _MAX_DIGEST_BATCH:
+                raise RuntimeError(f"Addison can only look at {_MAX_DIGEST_BATCH} files at once.")
+            return {"digests": {p: self.digests[p] for p in paths if p in self.digests}}
+
+    count = _MAX_DIGEST_BATCH + 1
+    seed = Store(tmp_path / IPC_DB_NAME)
+    seed.set_setting("widgets_seeded", "1")
+    paths = [f"/Users/mira/Documents/doc-{i}.md" for i in range(count)]
+    for i, path in enumerate(paths):
+        _seed(seed, f"doc-{i}", path)
+
+    bridge = _CappedDigest()
+    # "a" * 64 is the digest `_seed` writes, so an equal answer is "same" and a
+    # different one is "changed" — both real verdicts, which is the whole assertion.
+    bridge.digests = {
+        path: {"sha256": ("a" * 64 if i % 2 == 0 else "b" * 64), "missing": False}
+        for i, path in enumerate(paths)
+    }
+    h = _server(tmp_path, bridge)
+    try:
+        documents = _call(h, "knowledge.list", {}, 1)["documents"]
+        assert len(documents) == count
+        verdicts = {d["onDisk"] for d in documents}
+        assert verdicts == {"same", "changed"}, (
+            f"every row must get a real verdict past the shell's cap, got {verdicts}"
+        )
+        assert all(len(batch) <= _MAX_DIGEST_BATCH for batch in bridge.digest_calls)
+        # Sliced, not asked per row: two calls for two hundred and one documents.
+        assert len(bridge.digest_calls) == 2
+        assert sum(len(batch) for batch in bridge.digest_calls) == count
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_the_digest_batch_matches_the_shells_cap():
+    """The number is the SHELL's, and there is no import from Rust to make it one.
+    ``MAX_BATCH_PATHS`` in ``filesystem.rs`` is where the refusal actually lives; a
+    Python constant above it slices into batches the shell then throws away, and one
+    below it costs a round trip per two hundred rows for nothing.
+
+    Mutation: change either constant and this fails, naming both."""
+    from agent_core.rpc.knowledge import _MAX_DIGEST_BATCH
+
+    source = (_REPO_ROOT / "shell" / "src-tauri" / "src" / "filesystem.rs").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"^const MAX_BATCH_PATHS: usize = (\d+);", source, re.MULTILINE)
+    assert match is not None, "MAX_BATCH_PATHS is gone from filesystem.rs — where did the cap go?"
+    assert int(match.group(1)) == _MAX_DIGEST_BATCH, (
+        f"the shell caps a batch at {match.group(1)} and this file slices at "
+        f"{_MAX_DIGEST_BATCH}: the bigger of the two decides how many rows lose "
+        "their status sentence"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +580,83 @@ def test_with_no_embedder_wired_adding_says_so_plainly(tmp_path):
         _shutdown(h.reader, h.thread)
 
 
+def test_an_embedder_with_no_model_name_is_refused_before_the_picker_opens(tmp_path):
+    """A VECTOR NOBODY CAN EVER READ. Every embedding is stored under the model that
+    made it and ``search_knowledge`` reads back only its own model's rows, so a run
+    under ``""`` would write a whole document's worth of vectors that no search can
+    reach — the row saying "Ready. 12 passages", the panel saying nothing is wrong,
+    and every question about it answered from nothing.
+
+    The refusal is the "restart Addison" sentence and not the "install Ollama" one: an
+    embedder with no model name is a wiring fault in this process, and pointing at
+    Ollama would send somebody to fix a machine that is fine.
+
+    Mutation: drop ``or not str(getattr(embedder, "model", "") or "")`` from the guard
+    in ``_knowledge_pick_and_prepare`` — the picker opens, the document is embedded,
+    and this fails on both assertions."""
+    bridge = _DocumentBridge([_document(_TENANCY)])
+    h = _server(tmp_path, bridge, embedder=_indexer(model=""))
+    try:
+        assert _call(h, "knowledge.add", {}, 1) == {
+            "ok": False, "error": _CANNOT_ADD_DOCUMENTS
+        }
+        assert _rows(tmp_path, "knowledge_documents") == []
+        assert bridge.suggested == [], "the dialog must not open for a run that cannot store"
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_picker_nobody_answered_says_so_instead_of_reading_as_a_broken_shell(tmp_path):
+    """A DIALOG WAITS ON A PERSON, and past the bridge's budget the bridge raises
+    ``ShellCallTimeout`` — which is not a refusal and not a cancellation. Relayed as
+    an ordinary ``RuntimeError`` it became "Addison couldn't finish that just now",
+    a sentence about a wedged shell, shown to somebody whose file dialog was still
+    open and working perfectly.
+
+    Mutation: delete the ``except ShellCallTimeout`` arm in
+    ``_knowledge_pick_and_prepare`` — the generic ``RuntimeError`` arm catches it (it
+    is a subclass) and relays the bridge's own sentence, and this fails."""
+    from agent_core.rpc.knowledge import _PICKER_TIMED_OUT
+    from agent_core.tools.base import ShellCallTimeout
+
+    bridge = _DocumentBridge([ShellCallTimeout("Addison couldn't finish that just now.")])
+    h = _server(tmp_path, bridge)
+    try:
+        answer = _call(h, "knowledge.add", {}, 1)
+        assert answer == {"ok": False, "error": _PICKER_TIMED_OUT}
+        assert "couldn't finish" not in answer["error"]
+        assert _rows(tmp_path, "knowledge_documents") == []
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_duplicate_is_refused_before_it_is_embedded(tmp_path):
+    """THE MINUTE THAT WAS SPENT ON AN ANSWER ALREADY KNOWN. A second add of the same
+    path was chunked, screened and embedded passage by passage — against a local
+    model, one request each — and only then did the commit job read the ``path``
+    column and refuse it. The fact was available the moment the dialog closed.
+
+    So the worker reads the existing paths before the thread starts, and the thread
+    refuses there. The commit job still asks the live store, because the early set is
+    a snapshot from before a dialog that can stand open for minutes; the test above
+    (``test_the_same_document_cannot_be_added_twice``) is what holds that half.
+
+    Mutation: neuter the ``doc_id is None and path in known_paths`` branch in
+    ``_knowledge_pick_and_prepare`` — the answer is still the right sentence, and the
+    spy below records the embedding run that should never have happened."""
+    embedder = _SpyEmbedder(_indexer())
+    bridge = _DocumentBridge([_document(_TENANCY), _document(_TENANCY)])
+    h = _server(tmp_path, bridge, embedder=embedder)
+    try:
+        assert _call(h, "knowledge.add", {}, 1)["ok"] is True
+        assert embedder.prepared == 1
+        assert _call(h, "knowledge.add", {}, 2) == {"ok": False, "error": _ALREADY_ADDED}
+        assert embedder.prepared == 1, "the duplicate was embedded before it was refused"
+        assert len(_rows(tmp_path, "knowledge_documents")) == 1
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
 # ---------------------------------------------------------------------------
 # (3) Re-reading a document
 # ---------------------------------------------------------------------------
@@ -575,6 +749,37 @@ def test_reindex_refuses_a_different_file_and_leaves_the_row_untouched(tmp_path)
         assert len(after) == 1
         assert dict(after[0]) == dict(before), "the row is exactly as it was"
         assert {row["id"] for row in _rows(tmp_path, "knowledge_chunks")} == before_chunks
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_different_file_is_refused_before_it_is_embedded(tmp_path):
+    """The other half of the test above, and the half it could not see. The refusal
+    was correct and it arrived AFTER the whole document had been chunked, screened and
+    embedded — a minute of a laptop's fan, spent on a file that was never going to be
+    written, for a comparison the thread could have made the moment the dialog closed.
+
+    The path the row already has is what the dialog was pointed at, so the thread has
+    it. The commit job asks again against the live row, because a picker can stand
+    open for minutes and rows move; the test above holds that half.
+
+    Mutation: neuter the ``doc_id is not None and suggested_path and path !=
+    suggested_path`` branch in ``_knowledge_pick_and_prepare`` — the sentence is
+    unchanged, and the spy records the embedding run."""
+    embedder = _SpyEmbedder(_indexer())
+    bridge = _DocumentBridge([_document(_TENANCY), _document(_NOTES, _SHORTER_TEXT)])
+    h = _server(tmp_path, bridge, embedder=embedder)
+    try:
+        first = _call(h, "knowledge.add", {}, 1)["document"]
+        assert embedder.prepared == 1
+        assert _call(h, "knowledge.reindex", {"id": first["id"]}, 2) == {
+            "ok": False, "error": _DIFFERENT_FILE
+        }
+        assert embedder.prepared == 1, "the wrong file was embedded before it was refused"
+        # The dialog WAS pointed at the row — the refusal is about what came back,
+        # not about the suggestion, and a test that skipped the picker would say
+        # nothing about either.
+        assert bridge.suggested == [None, _TENANCY]
     finally:
         _shutdown(h.reader, h.thread)
 
@@ -753,8 +958,14 @@ def test_the_picker_and_the_embedding_run_never_touch_the_store():
         node for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "_knowledge_pick_and_prepare"
     )
+    # ``_knowledge_known_paths`` is in this list beside the store itself: it is a
+    # store read that runs on the WORKER before the thread starts, and its answer is
+    # handed in as an argument. Calling it from here would be the same cross-thread
+    # access wearing a different name — the exact mistake the argument exists to make
+    # unnecessary.
+    forbidden = ("store", "_store", "_ensure_built", "_knowledge_known_paths")
     for node in ast.walk(prepare):
-        if isinstance(node, ast.Attribute) and node.attr in ("store", "_store", "_ensure_built"):
+        if isinstance(node, ast.Attribute) and node.attr in forbidden:
             raise AssertionError(
                 f"_knowledge_pick_and_prepare touches the store at line {node.lineno}: "
                 "it runs on the knowledge-add thread, and the sqlite3 connection "
@@ -794,13 +1005,19 @@ def test_the_thread_body_only_ever_enqueues_or_answers():
             )
 
 
-def test_every_knowledge_method_but_add_is_routed_to_the_worker():
-    """``main.py`` may name a ``knowledge.*`` method in exactly two places: the
-    ``_KNOWLEDGE_JOBS`` table that routes it to the queue, and the ONE inline entry
-    for ``knowledge.add``, whose handler starts a thread and returns. Anything else —
-    an inline handler added by imitation of ``permission.respond`` — would put a store
-    read on the read loop, silently, in a way no behavioural test of that handler
-    would show.
+def test_every_knowledge_method_is_routed_to_the_worker():
+    """``main.py`` may name a ``knowledge.*`` method in exactly ONE place: the
+    ``_KNOWLEDGE_JOBS`` table that routes it to the queue. Anything else — an inline
+    handler added by imitation of ``permission.respond`` — would put a store read on
+    the read loop, silently, in a way no behavioural test of that handler would show.
+
+    ``knowledge.add`` USED TO BE THE EXCEPTION and is not any more. Bound inline, it
+    started its picker thread with no idea what was already in the list, so a document
+    added twice was chunked, screened and embedded in full before the commit job read
+    the ``path`` column and refused it — a minute of work for an answer that was
+    knowable the moment the dialog closed. It is a worker job now, and the job does
+    the two-millisecond read and hands off to the same thread, so nothing slow moved
+    onto the queue (``test_the_picker_thread_does_not_block_the_worker`` holds that).
 
     Mutation: move ``Method.KNOWLEDGE_LIST`` out of ``_KNOWLEDGE_JOBS`` and bind it to
     an inline handler — this fails, naming the method."""
@@ -812,10 +1029,7 @@ def test_every_knowledge_method_but_add_is_routed_to_the_worker():
         if isinstance(value, str) and value.startswith("knowledge.")
     }
     assert named, "no knowledge.* methods found in protocol.py — did they move?"
-    assert {getattr(Method, name) for name in named} == (
-        set(main_module._KNOWLEDGE_JOBS) | {Method.KNOWLEDGE_ADD}
-    )
-    assert Method.KNOWLEDGE_ADD not in main_module._KNOWLEDGE_JOBS
+    assert {getattr(Method, name) for name in named} == set(main_module._KNOWLEDGE_JOBS)
 
     tree = ast.parse(_MAIN_SRC.read_text(encoding="utf-8"))
     jobs_table = next(
@@ -824,7 +1038,6 @@ def test_every_knowledge_method_but_add_is_routed_to_the_worker():
         and any(getattr(t, "id", None) == "_KNOWLEDGE_JOBS" for t in node.targets)
     )
     allowed = {id(node) for node in ast.walk(jobs_table)}
-    seen_add = 0
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Attribute)
@@ -833,15 +1046,11 @@ def test_every_knowledge_method_but_add_is_routed_to_the_worker():
             and node.attr in named
             and id(node) not in allowed
         ):
-            if node.attr == "KNOWLEDGE_ADD":
-                seen_add += 1
-                continue
             raise AssertionError(
                 f"main.py names Method.{node.attr} at line {node.lineno}, outside "
                 "_KNOWLEDGE_JOBS: a knowledge.* method answered anywhere but the "
                 "worker queue would read the store on the wrong thread"
             )
-    assert seen_add == 1, "knowledge.add is bound inline exactly once"
 
 
 def test_the_picker_thread_does_not_block_the_worker(tmp_path):
@@ -850,9 +1059,13 @@ def test_the_picker_thread_does_not_block_the_worker(tmp_path):
     folder picker had until 2026-08-22, where somebody browsing for a project held up
     the very panel they were browsing from.
 
-    Mutation: route ``knowledge.add`` through ``_KNOWLEDGE_JOBS`` instead of the
-    inline handler — the list below queues behind the picker and never arrives, and
-    ``wait_for``'s deadline fires."""
+    ``knowledge.add`` IS A WORKER JOB and this still holds, which is the point of
+    keeping the test after that change: the job reads the existing paths and starts a
+    thread, so the worker is free again before the dialog opens.
+
+    Mutation: call ``self._run_knowledge_read(...)`` directly in
+    ``_start_knowledge_read`` instead of starting the thread — the list below queues
+    behind the picker and never arrives, and ``wait_for``'s deadline fires."""
     import threading
 
     opened = threading.Event()

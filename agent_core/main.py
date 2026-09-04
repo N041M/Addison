@@ -1037,7 +1037,11 @@ class JsonRpcServer(
         # that repeats is a thing that must be switched off, which is the honest half
         # of the G2 argument in channel_service.py rather than an afterthought.
         self._channel_service.stop_all()
-        self._queue.put(None)   # stop the worker once stdin closes
+        # Stop the worker once stdin closes. A `knowledge_commit` a picker thread
+        # enqueues AFTER this is never read, so that add is never answered and never
+        # written — correct at shutdown (the window that asked is going too), and the
+        # reason a commit is never the thing that has to land.
+        self._queue.put(None)
 
     def _database_created_by_this_launch(self) -> bool | None:
         """Did the database file come into existence on THIS launch? None when we
@@ -1472,12 +1476,6 @@ class JsonRpcServer(
             # handler starts a thread and returns. It is NOT a worker job, and
             # that is the whole point — see its docstring.
             Method.WORKSPACE_PICK_DIRECTORY: self._handle_workspace_pick_directory,
-            # Inline in the same sense, and for both of that one's reasons at once:
-            # this opens a modal picker AND then runs a local embedding pass that can
-            # take a minute. The handler starts a thread and returns; the thread hands
-            # the WRITE back to the worker as a knowledge_commit job, so no SQLite
-            # ever crosses a thread. See _handle_knowledge_add.
-            Method.KNOWLEDGE_ADD: self._handle_knowledge_add,
         }
         for jobs in (
             _ROUTINE_JOBS,
@@ -1552,19 +1550,37 @@ class JsonRpcServer(
 
     # --- adding a document: a thread to read it, the worker to write it -----
     #
-    # THE FOURTH PLACE, and it needs both halves of the folder picker's reason at
-    # once. ``knowledge.add`` opens a modal dialog somebody may sit in front of while
-    # they go and find the file, and THEN embeds every passage of it against a local
-    # model — a minute for a big document, with no progress line. On the read loop
-    # that is an app that has stopped answering; on the worker it is every store RPC
-    # behind it waiting, including the list the very same panel re-reads.
+    # BOTH HALVES OF THE FOLDER PICKER'S REASON AT ONCE. ``knowledge.add`` opens a
+    # modal dialog somebody may sit in front of while they go and find the file, and
+    # THEN embeds every passage of it against a local model — a minute for a big
+    # document, with no progress line. On the read loop that is an app that has
+    # stopped answering; on the worker it is every store RPC behind it waiting,
+    # including the list the very same panel re-reads.
     #
     # So the reading runs on its own thread and the WRITING goes back on the queue as
     # a ``knowledge_commit`` job. That split is not tidiness: a ``sqlite3`` connection
     # is usable only on the thread that opened it, and the worker is that thread.
+    #
+    # BOTH ADD AND REINDEX ARE WORKER JOBS THAT START THAT THREAD, and add only became
+    # one on review. It used to be bound inline, off the queue entirely, which meant
+    # it began with no idea what was already in the list — so a document somebody
+    # added twice was chunked, screened and embedded in full before the commit job
+    # looked at the `path` column and refused it. The store read is two milliseconds
+    # on the worker; the embedding run it saves is a minute. The worker is held for
+    # the read alone: both handlers hand off to a thread and return.
     def _handle_knowledge_add(self, params: dict, request_id) -> None:
-        """knowledge.add — start the picker thread and return; it answers itself."""
-        self._start_knowledge_read(request_id, doc_id=None, suggested_path=None)
+        """knowledge.add — a WORKER job that starts the picker thread.
+
+        The read is the paths already in the list, so the thread can refuse a
+        duplicate before it embeds one. It is a snapshot and known to be one; the
+        commit job asks the live store again and that is the answer that counts
+        (``rpc/knowledge.py::_knowledge_known_paths``)."""
+        self._start_knowledge_read(
+            request_id,
+            doc_id=None,
+            suggested_path=None,
+            known_paths=self._knowledge_known_paths(),
+        )
 
     def _handle_knowledge_reindex(self, params: dict, request_id) -> None:
         """knowledge.reindex {id} — a WORKER job that starts the same thread.
@@ -1573,7 +1589,8 @@ class JsonRpcServer(
         looking the row up is a store read (worker), and re-reading the file is a
         picker plus an embedding run (its own thread). The row's path goes with it so
         the dialog opens where the document lives and pre-fills its name — the person
-        confirms the same file rather than hunting for it again."""
+        confirms the same file rather than hunting for it again, and a file that is
+        not that one is refused on the thread before anything is embedded."""
         refusal, doc_id, path = self._knowledge_reindex_target(params)
         if refusal is not None:
             self._respond(request_id, refusal)
@@ -1581,11 +1598,16 @@ class JsonRpcServer(
         self._start_knowledge_read(request_id, doc_id=doc_id, suggested_path=path)
 
     def _start_knowledge_read(
-        self, request_id, *, doc_id: str | None, suggested_path: str | None
+        self,
+        request_id,
+        *,
+        doc_id: str | None,
+        suggested_path: str | None,
+        known_paths: frozenset[str] = frozenset(),
     ) -> None:
         thread = threading.Thread(
             target=self._run_knowledge_read,
-            args=(request_id, doc_id, suggested_path),
+            args=(request_id, doc_id, suggested_path, known_paths),
             name="knowledge-add",
             daemon=True,
         )
@@ -1640,13 +1662,22 @@ class JsonRpcServer(
             raise RuntimeError(_GENERIC_TURN_ERROR)
 
     def _handle_knowledge_job(self, kind: str, params: dict, request_id) -> None:
-        """The four ``knowledge_*`` worker jobs, one level down from the worker loop.
+        """The five ``knowledge_*`` worker jobs, one level down from the worker loop.
 
         ``knowledge_commit`` is THE SECOND JOB KIND WITH NO RPC METHOD BEHIND IT, and
         unlike ``channel_turn`` it does have somebody waiting: ``request_id`` is the
         add or reindex request, parked while its picker thread read the file. This job
         is the whole of the writing, which is what keeps the one thread that owns the
         database the only thread that ever touches it.
+
+        It is also THE ONE JOB THAT CAN BE POSTED AFTER THE WORKER HAS BEEN TOLD TO
+        STOP. ``run()`` puts the ``None`` sentinel on the queue when stdin closes, and
+        a picker thread still standing in front of a dialog can enqueue its commit
+        behind it — where nothing will ever read it, so the request is never answered
+        and the document is never written. That is the correct outcome and not a leak:
+        the app is closing, the frontend that asked is going with it, and the
+        alternative is a write racing a shutdown. The sentence at the sentinel in
+        ``run()`` says the same thing from the other end.
 
         An unknown kind cannot arrive — every producer is in this file — so it raises
         rather than answering, and the loop's own catch-all turns that into one plain
@@ -1655,6 +1686,8 @@ class JsonRpcServer(
             self._respond(request_id, self._knowledge_list())
         elif kind == "knowledge_remove":
             self._respond(request_id, self._knowledge_remove(params))
+        elif kind == "knowledge_add":
+            self._handle_knowledge_add(params, request_id)
         elif kind == "knowledge_reindex":
             self._handle_knowledge_reindex(params, request_id)
         elif kind == "knowledge_commit":
@@ -1662,7 +1695,7 @@ class JsonRpcServer(
         else:
             raise RuntimeError(_GENERIC_TURN_ERROR)
 
-    def _run_knowledge_read(self, request_id, doc_id, suggested_path) -> None:
+    def _run_knowledge_read(self, request_id, doc_id, suggested_path, known_paths) -> None:
         """The picker thread's whole body: ask, read, embed, then hand the write over.
 
         It either answers the request itself or enqueues the commit job that will —
@@ -1672,7 +1705,7 @@ class JsonRpcServer(
         sentence ``_dispatch`` gives any handler that throws, with no stack trace
         (CLAUDE.md)."""
         try:
-            answer, job = self._knowledge_pick_and_prepare(doc_id, suggested_path)
+            answer, job = self._knowledge_pick_and_prepare(doc_id, suggested_path, known_paths)
             if job is not None:
                 self._queue.put(("knowledge_commit", job, request_id))
             else:
@@ -2893,15 +2926,17 @@ _CHANNEL_JOBS = {
 # round trip blocks whichever thread makes it — the read loop being the thread that
 # has to deliver the answer.
 #
-# KNOWLEDGE_ADD IS DELIBERATELY ABSENT, exactly as WORKSPACE_PICK_DIRECTORY is from
-# _WORKSPACE_JOBS and for a sharper version of that reason: it opens a modal dialog
-# and then runs a local embedding pass over the whole document, so queueing it here
-# would park every other store RPC behind somebody browsing for a file. It answers on
-# its own thread from the dispatch table (`_handle_knowledge_add`) and hands its WRITE
-# back to this queue as a `knowledge_commit` job. `knowledge.reindex` IS here, because
-# its first step is a store read; the same thread is started from the job.
+# ADD AND REINDEX ARE BOTH HERE, and neither of them does its slow half on this
+# queue. Each is a store READ that then starts the `knowledge-add` thread and returns
+# — the modal dialog and the embedding run happen there, and the WRITE comes back as
+# a `knowledge_commit` job. Add was bound inline, off the queue, until review: with
+# no store read in front of it, it had no way to know the document was already in the
+# list, so a duplicate was embedded in full and refused afterwards. Two milliseconds
+# on the worker buys that minute back, and the worker is free again before the dialog
+# opens.
 _KNOWLEDGE_JOBS = {
     Method.KNOWLEDGE_LIST: "knowledge_list",
+    Method.KNOWLEDGE_ADD: "knowledge_add",
     Method.KNOWLEDGE_REINDEX: "knowledge_reindex",
     Method.KNOWLEDGE_REMOVE: "knowledge_remove",
 }
@@ -2965,14 +3000,23 @@ def main() -> None:
     # import on a path the CLI does not need. Imported HERE rather than in the tool
     # for the reason `build_registry`'s docstring gives — a tool may not import a
     # provider, and the indexer does.
+    #
+    # UNDER A LOCK because "once" is now a claim about two threads. It used to be
+    # reached only from a tool call on the worker; knowledge phase 3 calls it from the
+    # `knowledge-add` thread as well, and an unlocked check-then-set has a window in
+    # which both build one. Nothing here is expensive and neither instance would be
+    # wrong — the model name is the same — but "built ONCE" is either true or it is a
+    # comment, and this is what costs less than keeping the comment honest.
     _embedder_holder: dict[str, Any] = {}
+    _embedder_lock = threading.Lock()
 
     def _live_embedder() -> Any:
-        if "embedder" not in _embedder_holder:
-            from agent_core.knowledge.indexer import KnowledgeIndexer
+        with _embedder_lock:
+            if "embedder" not in _embedder_holder:
+                from agent_core.knowledge.indexer import KnowledgeIndexer
 
-            _embedder_holder["embedder"] = KnowledgeIndexer()
-        return _embedder_holder["embedder"]
+                _embedder_holder["embedder"] = KnowledgeIndexer()
+            return _embedder_holder["embedder"]
 
     registry = build_registry(
         profile,

@@ -129,6 +129,14 @@ class ShellBridgeStubs:
         # opened when the test never meant to say anything about pickers.
         raise NotImplementedError
 
+    def digest_knowledge_documents(self, paths: list[str]) -> dict:
+        # Knowledge phase 3. Raising too, and the caller catches it: `knowledge.list`
+        # folds ANY failure here into "Addison can't tell" for the rows in that batch,
+        # so a suite-wide stub that raised is exactly the shape the list has to
+        # survive — and a test that means to say something about digests supplies its
+        # own fake.
+        raise NotImplementedError
+
     def write_workspace_file(self, path: str, content: str) -> dict:
         raise NotImplementedError
 
