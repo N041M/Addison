@@ -208,6 +208,14 @@ _BRIDGE_CALLS = (
     # same reason the note below records: a person is in front of both dialogs, and
     # whether that deserves the human-paced budget is a separate call from this one.
     ("pick_file", ()),
+    # The document picker (knowledge phase 3) joins its two siblings on the DEFAULT
+    # budget, and for their reason exactly: a person is in front of this dialog too,
+    # and whether a picker deserves the human-paced budget is one call about all three
+    # rather than three separate ones. What it costs is the same as for the others —
+    # somebody who leaves the dialog open for a minute gets "Addison couldn't finish
+    # that just now", which `knowledge.add` shows as a plain line and nothing else:
+    # nothing is written, and pressing the button again re-opens the picker.
+    ("pick_knowledge_document", (None,)),
     ("get_app_build_ref", ()),
     ("get_provider_key", ("anthropic",)),
     # The messaging-channel token (phase 1). Person-paced like every other

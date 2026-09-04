@@ -130,6 +130,18 @@ _REVIEWED_THREAD_TARGETS = {
     # and a later version that wanted one would be a new owner decision against
     # this floor rather than an extension of this feature.
     "self._poll_loop",
+    # main.py — the "Your documents" picker and its indexing run (knowledge phase 3).
+    #
+    # WHAT HANDS IT ITS WORK: a person pressing "Add a document…", "Update" or "Try
+    # again". The thread is started by the handler for that one frame and dies when it
+    # has answered it; there is no loop, no wait on a clock, and nothing that starts a
+    # second one. Its first act is to put a modal file dialog in front of the person,
+    # so it cannot even begin without them.
+    #
+    # WHAT IT DOES: one shell call, then chunk/screen/embed against a LOCAL model, then
+    # it hands the write to the same worker queue every inbound frame goes on. It
+    # starts no turn, runs no tool, and reaches no model that could ask for one.
+    "self._run_knowledge_read",
 }
 
 _ADD_TARGET_HINT = (

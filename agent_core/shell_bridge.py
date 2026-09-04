@@ -66,6 +66,12 @@ class ServerShellBridge(ShellBridge, Protocol):
     # this picker, and the handler that answers that click calls it.
     def pick_file(self) -> str: ...
 
+    # Your documents (knowledge phase 3), declared here for that same reason and one
+    # of its own: this is the only way a document's bytes reach the core, and it is a
+    # picker every time. A TOOL with this method would be a way for the model to put
+    # a file dialog on screen and read whatever came back.
+    def pick_knowledge_document(self, suggested_path: str | None) -> dict: ...
+
     # The review surface's read paths (Phase-3 plan Build §1). They are declared HERE
     # and not on ``ShellBridge`` for the reason that Protocol's own docstring gives —
     # it is "exactly the surface the v1 tools need", and no tool may ever have these.
@@ -190,6 +196,16 @@ def _trace(what: str) -> None:
 # Plain-language, never-leaks-internals fallbacks (CLAUDE.md).
 _TIMEOUT_MESSAGE = "Addison couldn't finish that just now. Please try again."
 _GENERIC_ERROR = "Addison couldn't complete that action. Please try again."
+
+#: What the shell says when somebody closes a picker without choosing a file.
+#:
+#: ONE SPELLING ON THIS SIDE OF THE BRIDGE. Every picker in ``filesystem.rs`` raises
+#: this exact sentence, and a cancelled pick is not a failure — it is a person
+#: changing their mind, which ``knowledge.add`` has to tell apart from "the shell
+#: refused" so the panel can show nothing at all rather than an error line. Matching
+#: on the sentence is what makes that possible; keeping the sentence in one constant
+#: is what keeps the match from silently going stale when a second reader copies it.
+PICKER_CANCELLED = "You closed the picker without choosing."
 
 
 class IpcShellBridge:
@@ -319,6 +335,34 @@ class IpcShellBridge:
     def pick_directory(self) -> str:
         # Native folder picker; raises (RuntimeError) if the user cancels.
         return self._call(Method.SHELL_PICK_DIRECTORY, {})["path"]
+
+    # --- your documents (knowledge phase 3) --------------------------------
+    def pick_knowledge_document(self, suggested_path: str | None) -> dict:
+        """Pick ONE plain-text or Markdown document and read it:
+        ``{"path", "displayName", "byteSize", "sha256", "content"}``.
+
+        A PATH COMES BACK, unlike ``pick_file``'s opaque handle, and the difference is
+        the whole design. The core stores that path so it can later ask the shell for
+        a DIGEST of it (``digest_workspace_files``) and say "this file has changed
+        since Addison read it". It never asks for the CONTENT of a path: re-reading
+        opens this picker again, pointed at the file, and the person confirms. A
+        path-based content read would hand the core a read-any-file capability, and
+        this design needs none.
+
+        ``suggested_path`` is where the dialog opens and what it pre-fills — the
+        row's own path when a person presses Update or Try again. It is a suggestion
+        and never a permission: whatever comes back is what the person actually
+        chose, and the caller compares it with the row before replacing anything.
+
+        Raises (RuntimeError) when the person cancels — with ``PICKER_CANCELLED``,
+        which the caller matches on — and when the shell refuses the file it was
+        given: too big, not an ordinary file, not UTF-8 text, or inside Addison's own
+        data directory. Each of those arrives as one plain sentence written for the
+        person, which the caller shows untouched."""
+        params: dict = {}
+        if suggested_path:
+            params["suggestedPath"] = suggested_path
+        return self._call(Method.SHELL_PICK_KNOWLEDGE_DOCUMENT, params)
 
     def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
         # undo of write_workspace_file: put prior bytes back, or DELETE when None (the

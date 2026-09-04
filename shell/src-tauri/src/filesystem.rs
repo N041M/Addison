@@ -108,6 +108,32 @@ const READ_SIZE_BOUND: u64 = 256 * 1024;
 /// Kept a whole number of MB: the sentence names it in MB and derives it from here.
 const PICKED_FILE_SIZE_BOUND: u64 = 1024 * 1024;
 
+/// A document the PERSON picked to add to "Your documents", larger than this, refuses
+/// the read (`shell.pickKnowledgeDocument`, knowledge phase 3).
+///
+/// ITS OWN CONSTANT, not a reuse of `PICKED_FILE_SIZE_BOUND`, because the two answer
+/// different questions about the same dialog. That one bounds what may cross the bridge
+/// for a SINGLE read and land whole in one model turn — a picture, charged as base64
+/// text. Nothing of the kind happens here: the text crosses once and is then chunked,
+/// and no turn ever sees the whole of it. What this one bounds is TIME. Every passage
+/// is embedded against a local model, one request each, and 2 MB is roughly two
+/// thousand passages — already a minute or more on a laptop, with no progress line to
+/// watch. A ceiling above this would buy a longer silence, not a bigger feature.
+///
+/// A REFUSAL, never truncation, for the reason every other read in this file refuses:
+/// half a document indexed reads as the whole one, and it would answer questions from
+/// the half it happened to get.
+///
+/// Kept a whole number of MB: the sentence names it in MB and derives it from here.
+const KNOWLEDGE_DOCUMENT_SIZE_BOUND: u64 = 2 * 1024 * 1024;
+
+/// What a document that is not text gets told. Plain text and Markdown are where
+/// nothing is guessed; PDF and Word extraction is lossy, and a table flattened into
+/// prose retrieves as nonsense (the plan's §7 says so out loud), so the honest answer
+/// today is "not yet" rather than a bad index nobody can see is bad.
+const NOT_A_DOCUMENT_TO_ADD: &str =
+    "Addison can't add that kind of file yet — plain text and Markdown for now.";
+
 /// How much of one file the read-only VIEWER may show (`shell.readWorkspaceFileForView`,
 /// the review surface's file pane — phase-3 plan Build §1).
 ///
@@ -314,6 +340,13 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         "shell.readWorkspaceFile" => read_workspace_file(params),
         "shell.restoreWorkspaceFile" => restore_workspace_file(app, params),
         "shell.pickDirectory" => pick_directory(app).await,
+        // "Your documents" (knowledge phase 3). A PICKER EVERY TIME, including the
+        // re-read: the core stores the path only so it can ask `digestWorkspaceFiles`
+        // whether the file changed, and it never asks this process to hand over
+        // content by path. `suggestedPath` only decides where the dialog opens and
+        // what it pre-fills — it grants nothing, and what comes back is whatever the
+        // person actually chose.
+        "shell.pickKnowledgeDocument" => pick_knowledge_document(app, params).await,
         // The review surface's READ paths (phase-3 plan Build §1). A person clicking a
         // folder is not the model acting, so these are reached from a `workspace.*` RPC
         // and never from a registry tool — the core confines which paths arrive
@@ -468,6 +501,95 @@ async fn pick_directory(app: &AppHandle) -> Result<Value, RpcError> {
         on_main(app, move || rfd::FileDialog::new().pick_folder()).await?;
     let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
     Ok(json!({ "path": path.to_string_lossy() }))
+}
+
+// shell.pickKnowledgeDocument {suggestedPath?} -> {path, displayName, byteSize, sha256, content}
+//
+// The ONE way a document's bytes reach the Agent Core for indexing, and it is a native
+// dialog every time — adding opens it empty, re-reading opens it on the file the row
+// already names so the person confirms the same document rather than hunting for it.
+//
+// A RAW PATH COMES BACK, unlike `pickFile`'s opaque handle, and the difference is the
+// design rather than a relaxation. The core keeps the path so it can later ask
+// `shell.digestWorkspaceFiles` — which reads no byte across the bridge — whether the
+// file has changed since. It never asks this process for the CONTENT of a path, so no
+// stored path is a standing read capability: getting the bytes again costs another
+// trip through this dialog.
+async fn pick_knowledge_document(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
+    let suggested = params
+        .get("suggestedPath")
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
+    let picked: Option<PathBuf> = on_main(app, move || {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("Text and Markdown", &["txt", "md", "markdown", "text"]);
+        if let Some(path) = suggested.as_deref() {
+            // A SUGGESTION AND NOT A SELECTION. The dialog opens where the document
+            // lives with its name filled in; the person still confirms, and what comes
+            // back is whatever they actually chose. The caller compares that with the
+            // row it was re-reading and refuses a different file.
+            if let Some(parent) = path.parent() {
+                dialog = dialog.set_directory(parent);
+            }
+            if let Some(name) = path.file_name() {
+                dialog = dialog.set_file_name(name.to_string_lossy());
+            }
+        }
+        dialog.pick_file()
+    })
+    .await?;
+    let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
+    read_knowledge_document(&path)
+}
+
+/// The read half of `pickKnowledgeDocument`, factored out of the dialog so every
+/// refusal is testable without a live app — `read_scoped_handle`'s split, for its
+/// reason.
+///
+/// FOUR REFUSALS, in the order this file always uses them: Addison's own data
+/// directory (the floor, first and unconditional), what the path IS, how big it is,
+/// and only then what the bytes turn out to be. The first three are judged from a
+/// stat taken BEFORE anything opens the file — a FIFO's length is 0, so no size
+/// ceiling stops it and `fs::read` on one never returns, on a handler awaited inline
+/// on the core's stdout pump.
+fn read_knowledge_document(path: &Path) -> Result<Value, RpcError> {
+    refuse_addison_data_dir(path)?;
+    if let Some(meta) = stat_on_disk(path) {
+        refuse_non_regular_file(&meta)?;
+        refuse_oversize_document(meta.len())?;
+    }
+    let bytes =
+        std::fs::read(path).map_err(|_| RpcError::app("Addison couldn't read that file."))?;
+    // The file that GREW between the stat and the read, or one metadata could not
+    // answer for at all. It has already cost this process the memory; it does not
+    // also get to cross the bridge and start a two-thousand-request embedding run.
+    refuse_oversize_document(bytes.len() as u64)?;
+
+    // HASHED BEFORE THE UTF-8 CHECK, over the bytes exactly as they came off the
+    // disk. This digest is what `shell.digestWorkspaceFiles` is later compared
+    // against to answer "has this file changed since Addison read it?", and that one
+    // hashes raw bytes — a digest taken over a re-encoded string would disagree with
+    // it for every file whose text round-trips to different bytes.
+    let byte_size = bytes.len() as u64;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let mut sha256 = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        let _ = write!(sha256, "{byte:02x}");
+    }
+
+    let content = String::from_utf8(bytes).map_err(|_| RpcError::app(NOT_A_DOCUMENT_TO_ADD))?;
+    let display_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    Ok(json!({
+        "path": path.to_string_lossy(),
+        "displayName": display_name,
+        "byteSize": byte_size,
+        "sha256": sha256,
+        "content": content,
+    }))
 }
 
 // shell.readScopedFile {fileHandle} -> {content, kind}
@@ -826,6 +948,24 @@ fn refuse_oversize_pick(len: u64) -> Result<(), RpcError> {
         return Err(RpcError::app(format!(
             "That file is too big for Addison to open — please pick one that's {} MB or smaller.",
             PICKED_FILE_SIZE_BOUND / (1024 * 1024)
+        )));
+    }
+    Ok(())
+}
+
+/// The knowledge-document ceiling, refused in plain language for somebody standing at
+/// a file dialog: a size they can act on, and no byte counts.
+///
+/// A THIRD SIBLING of `refuse_oversize_read` and `refuse_oversize_pick`, not a reuse
+/// of either — same shape, a different bound and a different sentence, and a shared
+/// version would be a function whose whole body is the arguments its callers pass in.
+/// The sentence says what Addison would have DONE with the file ("to add"), because
+/// that is the verb the person just pressed.
+fn refuse_oversize_document(len: u64) -> Result<(), RpcError> {
+    if len > KNOWLEDGE_DOCUMENT_SIZE_BOUND {
+        return Err(RpcError::app(format!(
+            "That document is too big for Addison to add — it can take files up to {} MB.",
+            KNOWLEDGE_DOCUMENT_SIZE_BOUND / (1024 * 1024)
         )));
     }
     Ok(())
@@ -2049,6 +2189,149 @@ mod tests {
         }
     }
 
+    // --- "Your documents": the picker's read half (knowledge phase 3) ---------
+
+    #[test]
+    fn a_knowledge_document_comes_back_whole_with_the_digest_of_its_own_bytes() {
+        // The happy path, and the half that keeps every refusal below honest: without
+        // it they would all pass under an always-refuse mutation.
+        //
+        // THE DIGEST IS THE LOAD-BEARING FIELD. It is what `digestWorkspaceFiles` is
+        // later compared against to answer "has this file changed since Addison read
+        // it?", and that method hashes the raw bytes — so this one must too. Asserted
+        // against `sha2` over the same bytes rather than a literal, which would pin
+        // the test to one string of text and say nothing about the property.
+        let path = temp_path();
+        let text = "# Tenancy agreement\n\nThe deposit shall be returned within ten days.\n";
+        std::fs::write(&path, text).expect("seed a document");
+
+        let result = read_knowledge_document(&path).unwrap();
+        assert_eq!(result.get("content").and_then(Value::as_str), Some(text));
+        assert_eq!(
+            result.get("byteSize").and_then(Value::as_u64),
+            Some(text.len() as u64)
+        );
+        assert_eq!(
+            result.get("displayName").and_then(Value::as_str),
+            path.file_name().unwrap().to_str()
+        );
+
+        let mut hasher = Sha256::new();
+        hasher.update(text.as_bytes());
+        let mut expected = String::new();
+        for byte in hasher.finalize() {
+            let _ = write!(expected, "{byte:02x}");
+        }
+        assert_eq!(
+            result.get("sha256").and_then(Value::as_str),
+            Some(expected.as_str()),
+            "the digest must be sha256 of the bytes read, so digestWorkspaceFiles can \
+             later be compared against it"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_knowledge_document_exactly_at_the_size_ceiling_is_read() {
+        // The ceiling is inclusive. A bound that also refused the largest legitimate
+        // document would be indistinguishable from one set too low, and the refusal
+        // test below would pass under an always-refuse.
+        let path = temp_path();
+        let at_ceiling = "a".repeat(KNOWLEDGE_DOCUMENT_SIZE_BOUND as usize);
+        std::fs::write(&path, &at_ceiling).expect("seed a document at the ceiling");
+
+        let result = read_knowledge_document(&path).unwrap();
+        assert_eq!(
+            result.get("content").and_then(Value::as_str).map(str::len),
+            Some(at_ceiling.len()),
+            "a document at the ceiling must come back whole, never truncated"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_knowledge_document_one_byte_over_the_ceiling_is_refused() {
+        // Mutation: delete the two `refuse_oversize_document` calls in
+        // `read_knowledge_document` and this returns Ok.
+        //
+        // WHAT THE BOUND PROTECTS IS TIME, not the channel: every passage of what
+        // comes back is embedded against a local model, one request each, with no
+        // progress line — so the ceiling is the difference between a wait and a
+        // window that looks broken.
+        let path = temp_path();
+        let over = "a".repeat(KNOWLEDGE_DOCUMENT_SIZE_BOUND as usize + 1);
+        std::fs::write(&path, &over).expect("seed a document one byte over");
+
+        let err = read_knowledge_document(&path).unwrap_err();
+        assert_eq!(err.code, -32000);
+        // Worded for somebody standing at a file dialog: a size they can act on, no
+        // byte counts, and the number derived from the constant so the two cannot
+        // drift apart.
+        assert_eq!(
+            err.message,
+            "That document is too big for Addison to add — it can take files up to 2 MB."
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            over.len() as u64,
+            "a refused read must leave the file exactly as it was"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_knowledge_document_that_is_not_utf8_is_refused() {
+        // Mutation: replace the `String::from_utf8` mapping with
+        // `String::from_utf8_lossy` and this returns Ok — which is exactly the
+        // failure worth refusing: lossy bytes index cleanly, retrieve as nonsense,
+        // and nothing downstream can tell that they did.
+        let path = temp_path();
+        // Lone 0xFF: valid in no UTF-8 sequence, and what a .doc or a PDF renamed to
+        // .txt is full of.
+        std::fs::write(&path, [0x68u8, 0x69, 0xFF, 0x0A]).expect("seed non-text bytes");
+
+        let err = read_knowledge_document(&path).unwrap_err();
+        assert_eq!(
+            err.message,
+            "Addison can't add that kind of file yet — plain text and Markdown for now."
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_knowledge_document_inside_the_addison_data_dir_is_refused() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // The shell's own floor, on this read path too. The core refuses nothing here
+        // — it never sees the path until after the dialog — so this process is the
+        // ONLY thing standing between a picker and Addison's own memory, which is
+        // plain text a person could otherwise add to a searchable index.
+        //
+        // Mutation: delete the `refuse_addison_data_dir` line in
+        // `read_knowledge_document` and this returns Ok.
+        let data_dir = std::env::temp_dir().join(format!("addison-dd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).expect("seed data dir");
+        let secret = data_dir.join("addison.sqlite3");
+        std::fs::write(&secret, "secret db bytes").expect("seed db");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", &secret);
+
+        let err = read_knowledge_document(&secret).unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
     /// Serializes every test that mutates the PROCESS-GLOBAL `ADDISON_DB_PATH`.
     /// cargo runs tests in parallel threads, so without this one test's `set_var`
     /// lands in the middle of another's assertion — which is exactly what happened
@@ -2328,6 +2611,7 @@ mod tests {
             ("fn read_workspace_path", "stat_on_disk", "std::fs::read("),
             ("fn capture_prior_text", "stat_on_disk", "std::fs::read("),
             ("fn read_scoped_handle", "stat_on_disk", "std::fs::read("),
+            ("fn read_knowledge_document", "stat_on_disk", "std::fs::read("),
             ("fn read_workspace_view", "stat_on_disk", "std::fs::File::open("),
             ("fn digest_workspace_path", "std::fs::metadata(", "std::fs::File::open("),
         ] {
