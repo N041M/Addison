@@ -95,6 +95,7 @@ from agent_core.rpc.channels import ChannelsMixin
 from agent_core.rpc.conversation import ConversationMixin
 from agent_core.rpc.cost_plan import CostPlanMixin
 from agent_core.rpc.guards import GuardsMixin
+from agent_core.rpc.knowledge import KnowledgeMixin
 from agent_core.rpc.mcp import McpMixin
 from agent_core.rpc.models import ModelsMixin
 from agent_core.rpc.profile import ProfileMixin
@@ -622,6 +623,7 @@ class JsonRpcServer(
     McpMixin,
     AutomationsMixin,
     ChannelsMixin,
+    KnowledgeMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -686,6 +688,7 @@ class JsonRpcServer(
         provider_key_probe=None,
         mcp_discover=None,
         mcp_call=None,
+        embedder_ref=None,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -756,6 +759,12 @@ class JsonRpcServer(
             call_tool=mcp_call or mcp_call_tool,
         )
         self._mcp_discover = mcp_discover or discover_tools
+        # Knowledge phase 3: the one embedder in this process, handed in by main()
+        # as the SAME `_live_embedder` the `search_knowledge` tool reaches through.
+        # A second one would mean a second model name, and a document embedded under
+        # one is invisible to a search made under the other. None in CLI-ish tests —
+        # `knowledge.add` then answers one plain sentence instead of half-working.
+        self._embedder_ref = embedder_ref
         # §4.6 Setup Assistant handoff: with no PRIMARY key yet, a turn runs on the
         # SETUP_ASSISTANT relay under its onboarding system prompt. ``primary_key_probe``
         # is a ()-> bool that reports whether a real PRIMARY key is available right now
@@ -1028,7 +1037,11 @@ class JsonRpcServer(
         # that repeats is a thing that must be switched off, which is the honest half
         # of the G2 argument in channel_service.py rather than an afterthought.
         self._channel_service.stop_all()
-        self._queue.put(None)   # stop the worker once stdin closes
+        # Stop the worker once stdin closes. A `knowledge_commit` a picker thread
+        # enqueues AFTER this is never read, so that add is never answered and never
+        # written — correct at shutdown (the window that asked is going too), and the
+        # reason a commit is never the thing that has to land.
+        self._queue.put(None)
 
     def _database_created_by_this_launch(self) -> bool | None:
         """Did the database file come into existence on THIS launch? None when we
@@ -1478,6 +1491,7 @@ class JsonRpcServer(
             _MCP_JOBS,
             _AUTOMATION_JOBS,
             _CHANNEL_JOBS,
+            _KNOWLEDGE_JOBS,
         ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
@@ -1531,6 +1545,171 @@ class JsonRpcServer(
         handler that throws, with no stack trace (CLAUDE.md)."""
         try:
             self._respond(request_id, self._workspace_pick_directory())
+        except Exception as exc:
+            self._respond_error(request_id, _SERVER_ERROR, _plain(exc))
+
+    # --- adding a document: a thread to read it, the worker to write it -----
+    #
+    # BOTH HALVES OF THE FOLDER PICKER'S REASON AT ONCE. ``knowledge.add`` opens a
+    # modal dialog somebody may sit in front of while they go and find the file, and
+    # THEN embeds every passage of it against a local model — a minute for a big
+    # document, with no progress line. On the read loop that is an app that has
+    # stopped answering; on the worker it is every store RPC behind it waiting,
+    # including the list the very same panel re-reads.
+    #
+    # So the reading runs on its own thread and the WRITING goes back on the queue as
+    # a ``knowledge_commit`` job. That split is not tidiness: a ``sqlite3`` connection
+    # is usable only on the thread that opened it, and the worker is that thread.
+    #
+    # BOTH ADD AND REINDEX ARE WORKER JOBS THAT START THAT THREAD, and add only became
+    # one on review. It used to be bound inline, off the queue entirely, which meant
+    # it began with no idea what was already in the list — so a document somebody
+    # added twice was chunked, screened and embedded in full before the commit job
+    # looked at the `path` column and refused it. The store read is two milliseconds
+    # on the worker; the embedding run it saves is a minute. The worker is held for
+    # the read alone: both handlers hand off to a thread and return.
+    def _handle_knowledge_add(self, params: dict, request_id) -> None:
+        """knowledge.add — a WORKER job that starts the picker thread.
+
+        The read is the paths already in the list, so the thread can refuse a
+        duplicate before it embeds one. It is a snapshot and known to be one; the
+        commit job asks the live store again and that is the answer that counts
+        (``rpc/knowledge.py::_knowledge_known_paths``)."""
+        self._start_knowledge_read(
+            request_id,
+            doc_id=None,
+            suggested_path=None,
+            known_paths=self._knowledge_known_paths(),
+        )
+
+    def _handle_knowledge_reindex(self, params: dict, request_id) -> None:
+        """knowledge.reindex {id} — a WORKER job that starts the same thread.
+
+        Two steps rather than one, because the two halves belong on different threads:
+        looking the row up is a store read (worker), and re-reading the file is a
+        picker plus an embedding run (its own thread). The row's path goes with it so
+        the dialog opens where the document lives and pre-fills its name — the person
+        confirms the same file rather than hunting for it again, and a file that is
+        not that one is refused on the thread before anything is embedded."""
+        refusal, doc_id, path = self._knowledge_reindex_target(params)
+        if refusal is not None:
+            self._respond(request_id, refusal)
+            return
+        self._start_knowledge_read(request_id, doc_id=doc_id, suggested_path=path)
+
+    def _start_knowledge_read(
+        self,
+        request_id,
+        *,
+        doc_id: str | None,
+        suggested_path: str | None,
+        known_paths: frozenset[str] = frozenset(),
+    ) -> None:
+        thread = threading.Thread(
+            target=self._run_knowledge_read,
+            args=(request_id, doc_id, suggested_path, known_paths),
+            name="knowledge-add",
+            daemon=True,
+        )
+        thread.start()
+
+    def _handle_channel_job(self, kind: str, params: dict, request_id) -> None:
+        """The messaging-channel worker jobs, one level down from the worker loop.
+
+        Lifted out of that loop UNCHANGED when knowledge's kinds arrived: see the
+        branch that calls this for why the loop cannot hold them all. Every arm here
+        does what it did inline, on the same thread, in the same order.
+
+        ``channel_turn`` is THE ONE JOB KIND WITH NO RPC METHOD BEHIND IT (messaging
+        channels phase 2). It is put on the queue by the channel service's poll
+        thread, never by a frame, and ``request_id`` is None because nothing is
+        waiting for a reply — the answer goes to a phone. From here it is an ordinary
+        turn on the ordinary thread, which is the whole point of handing it over
+        rather than running it where it arrived.
+
+        An unknown kind cannot arrive — every producer is in this file or in
+        ``channel_service.py`` — so it raises rather than answering, and the loop's own
+        catch-all turns that into one plain sentence."""
+        if kind == "channel_list":
+            self._respond(request_id, self._channel_list())
+        elif kind == "channel_add":
+            self._respond(request_id, self._channel_add(params))
+        elif kind == "channel_remove":
+            self._respond(request_id, self._channel_remove(params))
+        elif kind == "channel_connect":
+            self._respond(request_id, self._channel_connect(params))
+        elif kind == "channel_set_enabled":
+            self._respond(request_id, self._channel_set_enabled(params))
+        elif kind == "channel_set_on_wake":
+            self._respond(request_id, self._channel_set_on_wake(params))
+        elif kind == "channel_status":
+            self._respond(request_id, self._channel_status(params))
+        elif kind == "channel_begin_pairing":
+            self._respond(request_id, self._channel_begin_pairing(params))
+        elif kind == "channel_cancel_pairing":
+            self._respond(request_id, self._channel_cancel_pairing(params))
+        elif kind == "channel_pairings":
+            self._respond(request_id, self._channel_pairings(params))
+        elif kind == "channel_revoke_pairing":
+            self._respond(request_id, self._channel_revoke_pairing(params))
+        elif kind == "channel_pending_requests":
+            self._respond(request_id, self._channel_pending_requests(params))
+        elif kind == "channel_dismiss_request":
+            self._respond(request_id, self._channel_dismiss_request(params))
+        elif kind == "channel_turn":
+            self._run_channel_turn(params)
+        else:
+            raise RuntimeError(_GENERIC_TURN_ERROR)
+
+    def _handle_knowledge_job(self, kind: str, params: dict, request_id) -> None:
+        """The five ``knowledge_*`` worker jobs, one level down from the worker loop.
+
+        ``knowledge_commit`` is THE SECOND JOB KIND WITH NO RPC METHOD BEHIND IT, and
+        unlike ``channel_turn`` it does have somebody waiting: ``request_id`` is the
+        add or reindex request, parked while its picker thread read the file. This job
+        is the whole of the writing, which is what keeps the one thread that owns the
+        database the only thread that ever touches it.
+
+        It is also THE ONE JOB THAT CAN BE POSTED AFTER THE WORKER HAS BEEN TOLD TO
+        STOP. ``run()`` puts the ``None`` sentinel on the queue when stdin closes, and
+        a picker thread still standing in front of a dialog can enqueue its commit
+        behind it — where nothing will ever read it, so the request is never answered
+        and the document is never written. That is the correct outcome and not a leak:
+        the app is closing, the frontend that asked is going with it, and the
+        alternative is a write racing a shutdown. The sentence at the sentinel in
+        ``run()`` says the same thing from the other end.
+
+        An unknown kind cannot arrive — every producer is in this file — so it raises
+        rather than answering, and the loop's own catch-all turns that into one plain
+        sentence."""
+        if kind == "knowledge_list":
+            self._respond(request_id, self._knowledge_list())
+        elif kind == "knowledge_remove":
+            self._respond(request_id, self._knowledge_remove(params))
+        elif kind == "knowledge_add":
+            self._handle_knowledge_add(params, request_id)
+        elif kind == "knowledge_reindex":
+            self._handle_knowledge_reindex(params, request_id)
+        elif kind == "knowledge_commit":
+            self._respond(request_id, self._knowledge_commit(params))
+        else:
+            raise RuntimeError(_GENERIC_TURN_ERROR)
+
+    def _run_knowledge_read(self, request_id, doc_id, suggested_path, known_paths) -> None:
+        """The picker thread's whole body: ask, read, embed, then hand the write over.
+
+        It either answers the request itself or enqueues the commit job that will —
+        never both, and never neither. A thread that dies with an exception answers no
+        frame at all, and the panel would wait forever on a promise that never
+        settles, so the catch-all is not decoration: it collapses to the same plain
+        sentence ``_dispatch`` gives any handler that throws, with no stack trace
+        (CLAUDE.md)."""
+        try:
+            answer, job = self._knowledge_pick_and_prepare(doc_id, suggested_path, known_paths)
+            if job is not None:
+                self._queue.put(("knowledge_commit", job, request_id))
+            else:
+                self._respond(request_id, answer)
         except Exception as exc:
             self._respond_error(request_id, _SERVER_ERROR, _plain(exc))
 
@@ -1717,41 +1896,18 @@ class JsonRpcServer(
                     self._respond(request_id, self._automation_status())
                 elif kind == "automation_disarm_orphan":
                     self._respond(request_id, self._automation_disarm_orphan(params))
-                elif kind == "channel_list":
-                    self._respond(request_id, self._channel_list())
-                elif kind == "channel_add":
-                    self._respond(request_id, self._channel_add(params))
-                elif kind == "channel_remove":
-                    self._respond(request_id, self._channel_remove(params))
-                elif kind == "channel_connect":
-                    self._respond(request_id, self._channel_connect(params))
-                elif kind == "channel_set_enabled":
-                    self._respond(request_id, self._channel_set_enabled(params))
-                elif kind == "channel_set_on_wake":
-                    self._respond(request_id, self._channel_set_on_wake(params))
-                elif kind == "channel_status":
-                    self._respond(request_id, self._channel_status(params))
-                elif kind == "channel_begin_pairing":
-                    self._respond(request_id, self._channel_begin_pairing(params))
-                elif kind == "channel_cancel_pairing":
-                    self._respond(request_id, self._channel_cancel_pairing(params))
-                elif kind == "channel_pairings":
-                    self._respond(request_id, self._channel_pairings(params))
-                elif kind == "channel_revoke_pairing":
-                    self._respond(request_id, self._channel_revoke_pairing(params))
-                elif kind == "channel_pending_requests":
-                    self._respond(request_id, self._channel_pending_requests(params))
-                elif kind == "channel_dismiss_request":
-                    self._respond(request_id, self._channel_dismiss_request(params))
-                elif kind == "channel_turn":
-                    # THE ONE JOB KIND WITH NO RPC METHOD BEHIND IT (messaging
-                    # channels phase 2). It is put on this queue by the channel
-                    # service's poll thread, never by a frame, and `request_id` is
-                    # None because nothing is waiting for a reply — the answer goes
-                    # to a phone. From here it is an ordinary turn on the ordinary
-                    # thread, which is the whole point of handing it over rather
-                    # than running it where it arrived.
-                    self._run_channel_turn(params)
+                elif kind.startswith("channel_"):
+                    # TWO NAMESPACES DISPATCH ONE LEVEL DOWN, where every namespace
+                    # above still gets a branch each, and it is not a style
+                    # preference. pyright refuses to analyse a function past a
+                    # complexity ceiling and reports nothing else about it — so this
+                    # loop, which was already within one `elif` of that ceiling, would
+                    # have lost its type checking entirely the moment knowledge's four
+                    # kinds landed, silently and with a green suite. Two dispatchers a
+                    # level down cost one indirection and buy the whole method back.
+                    self._handle_channel_job(kind, params, request_id)
+                elif kind.startswith("knowledge_"):
+                    self._handle_knowledge_job(kind, params, request_id)
             except live_db_guard.LiveDatabaseBlocked as exc:
                 # A job can reach _ensure_built() too (conversation.list, and every
                 # mixin handler that calls it), so the same rule as the startup build
@@ -2761,6 +2917,30 @@ _CHANNEL_JOBS = {
     Method.CHANNEL_DISMISS_REQUEST: "channel_dismiss_request",
 }
 
+# knowledge.* read and write the three knowledge tables, so they run on the worker
+# like every other store op (the sqlite3 connection is bound to that thread). Method
+# -> worker job kind. Knowledge phase 3; docs/plans/knowledge-retrieval-plan.md.
+#
+# `knowledge.list` is here for the second half of `automation.status`'s reason as
+# well: it makes ONE Core -> Shell round trip to digest every stored path, and a
+# round trip blocks whichever thread makes it — the read loop being the thread that
+# has to deliver the answer.
+#
+# ADD AND REINDEX ARE BOTH HERE, and neither of them does its slow half on this
+# queue. Each is a store READ that then starts the `knowledge-add` thread and returns
+# — the modal dialog and the embedding run happen there, and the WRITE comes back as
+# a `knowledge_commit` job. Add was bound inline, off the queue, until review: with
+# no store read in front of it, it had no way to know the document was already in the
+# list, so a duplicate was embedded in full and refused afterwards. Two milliseconds
+# on the worker buys that minute back, and the worker is free again before the dialog
+# opens.
+_KNOWLEDGE_JOBS = {
+    Method.KNOWLEDGE_LIST: "knowledge_list",
+    Method.KNOWLEDGE_ADD: "knowledge_add",
+    Method.KNOWLEDGE_REINDEX: "knowledge_reindex",
+    Method.KNOWLEDGE_REMOVE: "knowledge_remove",
+}
+
 
 def _plain(exc: Exception) -> str:
     """A user-ready sentence for a handler failure — never the raw exception."""
@@ -2820,14 +3000,23 @@ def main() -> None:
     # import on a path the CLI does not need. Imported HERE rather than in the tool
     # for the reason `build_registry`'s docstring gives — a tool may not import a
     # provider, and the indexer does.
+    #
+    # UNDER A LOCK because "once" is now a claim about two threads. It used to be
+    # reached only from a tool call on the worker; knowledge phase 3 calls it from the
+    # `knowledge-add` thread as well, and an unlocked check-then-set has a window in
+    # which both build one. Nothing here is expensive and neither instance would be
+    # wrong — the model name is the same — but "built ONCE" is either true or it is a
+    # comment, and this is what costs less than keeping the comment honest.
     _embedder_holder: dict[str, Any] = {}
+    _embedder_lock = threading.Lock()
 
     def _live_embedder() -> Any:
-        if "embedder" not in _embedder_holder:
-            from agent_core.knowledge.indexer import KnowledgeIndexer
+        with _embedder_lock:
+            if "embedder" not in _embedder_holder:
+                from agent_core.knowledge.indexer import KnowledgeIndexer
 
-            _embedder_holder["embedder"] = KnowledgeIndexer()
-        return _embedder_holder["embedder"]
+                _embedder_holder["embedder"] = KnowledgeIndexer()
+            return _embedder_holder["embedder"]
 
     registry = build_registry(
         profile,
@@ -3056,6 +3245,10 @@ def main() -> None:
         cloud_provider_factory=_build_cloud_provider,
         connect_provider=_connect_provider,
         provider_key_probe=_provider_key_present,
+        # The SAME embedder the registry was handed above. One per process, so a
+        # document added through the Settings panel and a search made from a turn
+        # agree about which model's vectors are in the table.
+        embedder_ref=_live_embedder,
     )
     # Close the late-binding loop: snapshot_now's manager ref and warning-clear
     # closures resolve through this holder once the server exists (see above).

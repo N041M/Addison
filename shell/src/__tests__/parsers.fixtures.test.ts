@@ -23,7 +23,7 @@ import {
   parseMcpServers,
   parseChannels,
 } from "../ipc/client";
-import { normalizeProfile } from "../lib/parse";
+import { normalizeProfile, parseKnowledgeDocuments } from "../lib/parse";
 import { normalizeCloudModels, normalizeRoles } from "../hooks/useModelSelection";
 
 import statsFixture from "./fixtures/stats.get.json";
@@ -34,6 +34,7 @@ import snapshotListFixture from "./fixtures/snapshot.list.json";
 import workspaceListFixture from "./fixtures/workspace.list.json";
 import mcpListFixture from "./fixtures/mcp.list.json";
 import channelListFixture from "./fixtures/channel.list.json";
+import knowledgeListFixture from "./fixtures/knowledge.list.json";
 import automationListFixture from "./fixtures/automation.list.json";
 // The same method answered while SIMPLE is active — the only fixture whose name is
 // not a method name, because the payload has two shapes and no one call can show
@@ -400,6 +401,75 @@ describe("parseChannels over the real channel.list payload", () => {
       expect(["present", "absent", "unknown"]).toContain(
         (row as { tokenPresent: string }).tokenPresent,
       );
+    }
+  });
+});
+
+describe("parseKnowledgeDocuments over the real knowledge.list payload", () => {
+  it("reads the documents the core actually sends, newest first, both states", () => {
+    // Two rows because a document has two shapes worth pinning: one indexed, with
+    // its passage counts and the moment it was read, and one the local embedding
+    // model was not there for — which is REMEMBERED rather than refused, so the
+    // person can press Try again once Ollama is running. A fixture with only the
+    // happy row would let the parser drop `detail` and stay green on both sides.
+    //
+    // The order is the core's (newest first) and this side never re-sorts it.
+    expect(parseKnowledgeDocuments(knowledgeListFixture)).toEqual([
+      {
+        id: "doc-fixture-2",
+        displayName: "Notes.txt",
+        path: "/Users/mira/Notes.txt",
+        status: "failed",
+        detail:
+          "Addison couldn't do that, because the part that reads documents locally isn't " +
+          "available. Install Ollama and the 'nomic-embed-text' model, then try again.",
+        chunkCount: 0,
+        flaggedChunks: 0,
+        byteSize: 40,
+        addedAt: 4102444900,
+        indexedAt: null,
+        onDisk: "unknown",
+      },
+      {
+        id: "doc-fixture-1",
+        displayName: "Tenancy agreement.md",
+        path: "/Users/mira/Documents/Tenancy agreement.md",
+        status: "indexed",
+        detail: null,
+        chunkCount: 3,
+        flaggedChunks: 1,
+        byteSize: 1200,
+        addedAt: 4102444800,
+        indexedAt: 4102444860,
+        onDisk: "unknown",
+      },
+    ]);
+    // "unknown" is the honest answer the fixture server produces: it has no shell
+    // bridge, so nothing could digest the files. It must read as "Addison hasn't
+    // checked", which is why the indexed row above still says "Ready".
+  });
+
+  it("carries no part of the document itself, and no digest", () => {
+    // The webview renders a LIST, never the text. A row carrying content would put
+    // a person's private document into the lowest-trust process — and `sha256` has
+    // no use on this side at all, so its absence is checked here rather than
+    // trusted. This reads the FIXTURE rather than the parser, because a parser that
+    // dropped an extra field would keep this green while the core was already
+    // sending it over the wire.
+    for (const row of knowledgeListFixture.documents) {
+      expect(Object.keys(row as object).sort()).toEqual([
+        "addedAt",
+        "byteSize",
+        "chunkCount",
+        "detail",
+        "displayName",
+        "flaggedChunks",
+        "id",
+        "indexedAt",
+        "onDisk",
+        "path",
+        "status",
+      ]);
     }
   });
 });

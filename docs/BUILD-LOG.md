@@ -12,6 +12,196 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-04: the documents you attach get a surface, and the permission card stops parsing its own sentence
+
+Two pieces of work, and they share a lesson. Knowledge phase 3
+([`knowledge-retrieval-plan.md`](plans/knowledge-retrieval-plan.md) owns the subject
+and the four owner decisions) finished the feature: until today nothing in the app
+could add a document, so `search_knowledge` shipped two phases ago answering "there
+are no documents to search yet" and pointing at a Settings section that did not
+exist. The other is H9 of
+[`test-hardening-plan.md`](plans/test-hardening-plan.md) — the permission card's
+command travels as a FIELD now, not as a phrase for the webview to take apart. **The
+H9 work is on its own branch (`claude/permission-card-command`) and this entry rides
+with the Knowledge pull request**, because two branches both adding a top entry to
+this file is a conflict for no reason.
+
+**A FIELD THREE CORRECT LAYERS CARRIED AND A FOURTH SILENTLY DROPPED.** The most
+expensive finding of the day came out of the H9 work sideways, rather than from it.
+`normalizePermission` in `shell/src/App.tsx` — the ONE function that turns a
+`permission.requestGrant` frame into the props a card is rendered with, for both the
+notification and the `permission.pending` re-sync — had never copied `preview`. So the
+delete preview built on 2026-08-13 (5.6), the line the core walks a directory tree to
+compute, **has never appeared on a card in the running app**, and neither has the
+routine-sharing taint line of 2026-08-15, which rides the same field. The core was
+right, `protocol.py` was right, `PermissionCard.tsx` was right, and every frontend
+test rendered the component with a hand-built request that of course contained the
+field. Nothing was red. The 2026-08-21 whole-app pass did not catch it either, because
+[`TESTING-CHECKLIST.md`](TESTING-CHECKLIST.md) has no step that says the words "About
+to delete". **The general shape: a value that crosses four layers is tested at three
+of them, and the fourth is a normaliser nobody thinks of as logic.** Both fields are
+copied now, and both are pinned by a fixture the core generates rather than by a
+hand-built object.
+
+**A FIX IS NEW CODE, and the day's instance is on the H9 branch's own review.**
+Sending `command` as a field meant rendering it wherever a card is drawn — including
+the EXPIRED card, the record of a question whose turn was stopped. But the arming
+card's `permission_detail` is the automation's NAME, not a command (`arm_automation`
+puts the command in the arming preview, where reading it is the point), so an expired
+arming card drew "Nightly backup" in the mono block whose whole visual grammar means
+*this is the exact command that will run*. The change that removed one string-pun
+introduced another, in the same file, in the same hour. The correction landed on that
+branch before it became PR #156: an arming card carries NO card-level `command` (the
+arming payload owns the only command there), the dead keyword card draws that command
+and still says which automation it was, and both halves are pinned on the real
+`arm_automation` round trip rather than on a stand-in.
+
+**A TEST CAN BE INVISIBLE TO ITS OWN MUTATION IN TWO WAYS, AND BOTH SHOWED UP HERE.**
+Neither was found by reading; both were found by mutating the thing the test names.
+
+- **"Newest first" passed when the ordering was reversed**, because the two rows the
+  test seeded were added in the same wall-clock second, so the tie-break decided the
+  order and the ORDER BY did nothing. It is rewritten at the store, with the timestamps
+  the test controls, and dies now when the sort is flipped.
+- **"With no shell, the list still answers"** was written against an EMPTY list — and
+  `_knowledge_on_disk` returns before it reaches the bridge when there is nothing to
+  ask about, so the test never exercised the missing-bridge path it was named for. It
+  seeds a row now.
+
+**CARRIED FROM PHASES 1 AND 2 (2026-08-24), which never got an entry here.** Both are
+in the plan's §6 and both are the kind of thing that comes back:
+
+- **The import fence's first walk collected only the module half of an `ImportFrom`**,
+  so `from agent_core import orchestrator` walked straight through the fence that
+  exists to keep `knowledge/index.py` provider-free. Its own mutation test is the only
+  reason it is not still passing.
+- **The chunker's boundary search has to ignore breaks in the first half of its
+  window.** A paragraph break just after the start otherwise ends the chunk there,
+  emitting a passage a tenth of the size asked for — and multiplying the chunk count,
+  the embedding time and the vector rows for the whole document.
+
+**THE REVIEW ROUND — two read-only hunters over the merged tree, then one fix
+round, then a regression pass over the fixes.** Ranked by what it would have cost.
+
+- **A native file dialog was awaited inline on the core's stdout pump.** In the shell,
+  `dispatch_off_loop` claimed only `keychain.*`, `shell.runCommand` and the three
+  automation methods, so `shell.pickKnowledgeDocument` — exactly like `shell.pickFile`
+  and `shell.pickDirectory` before it, under a comment asserting that "a picker is
+  fast" — fell through to `filesystem::handle(...).await` inside `handle_line`, whose
+  caller is the reader loop. A dialog is not fast; it is a person deciding, and while
+  one stood open the shell read no further line of the core's output at all: every
+  Core→Frontend frame stalled behind it, and a Core→Shell request made from the worker
+  while the dialog was up (`knowledge.list`'s digest call) could not be answered, died
+  at the bridge's sixty-second ceiling, and parked the worker for a minute. The
+  core-side thread split this phase built so carefully bought nothing in production,
+  because the stall was one process over. The fix is a second dispatcher,
+  `dispatch_dialog_off_loop`, consulted right after the first: it claims exactly the
+  three dialog methods, spawns `filesystem::handle` on the async runtime, writes the
+  answer back through the same locked stdin path `spawn_request` uses, and captures the
+  core generation before the dialog opens so a picker answered after a respawn is
+  dropped rather than delivered to a stranger's request id. A separate function
+  because `dispatch_off_loop` is deliberately synchronous and `AppHandle`-free (the
+  clock test drives it) while a dialog needs the handle. `shell.saveNewFile` — the Save panel behind the `save_file` tool and routine
+  export — went through the same door once the regression pass pointed out that "the
+  turn that asked is already waiting on it" covered the asking turn and none of the
+  other frames in the app. Four native dialogs are off the pump; the membership test
+  names all four. The wiring is source-pinned in `handle_line`, because commenting the call out
+  left the whole suite green while every dialog went back to holding the app.
+- **Two size bounds, each right, never related.** The picker admits a document up to
+  2 MB; the review surface's digest answers "cannot tell" above 256 KB, a number its
+  own comment justifies from the write ledger (a file Addison overwrote was at most
+  that big). A document Addison never wrote is outside that reasoning, so for any
+  document between the two numbers the panel said "Ready" forever after an edit and
+  never offered Update. `shell.digestKnowledgeDocuments` now digests under the
+  document ceiling, `digest_workspace_path` takes its bound as a parameter, and a
+  compile-time assertion relates the two constants so they cannot drift apart twice.
+- **The cancel-versus-refusal test was a string match across two languages, and
+  nothing pinned it.** The core compared the shell's error text with one Python
+  constant; the Rust side held four separate copies of the sentence, and rewording
+  only the knowledge picker's copy left both suites green while a cancelled dialog
+  became an error line on the panel. One Rust constant at all four sites now, and a
+  Rust test that reads `shell_bridge.py` and asserts the exact sentence.
+- **A dialog waited on a process's budget, not a person's.** The picker call carried
+  the bridge's sixty-second default; `_KEYCHAIN_TIMEOUT` had already written down why
+  that is wrong for a modal dialog, and `workspace.pickDirectory` had already separated
+  a timeout from a cancel. The document picker got neither. It has its own ten-minute
+  budget now, and a timeout answers "Addison stopped waiting for the file picker, so
+  nothing was chosen and nothing changed."
+- **The builder's own three disagreements were right and are in.** A duplicate
+  document, and a re-read that picked a different file, were both refused only in the
+  commit job — after a full embedding run of a document that was never going to be
+  written; both are refused on the thread first now, with the authoritative check kept
+  where it was. And the shell refuses a digest batch over two hundred paths, so past
+  two hundred documents every row read "unknown"; the core slices the batch, and a test
+  reads the Rust constant so the two numbers stay one number.
+- **No frontend test tied a sentence to its row.** Every multi-row assertion was a
+  whole-document `getByText`, so rendering every row's status from the first document
+  left all thirty-seven tests green — on the one panel whose header rule is that a row
+  never claims more than the core said. One test now walks a three-state render (ready, failed,
+  gone) asserting `within(row)` for every row, which is what makes a cross-row leak
+  visible; the other multi-row cases reach their rows through per-document controls.
+- **Smaller, and fixed:** a file Addison cannot find now wins over every other state
+  (Remove only, in any status, as the comment beside the rule had claimed all along);
+  a primed "Really remove?" is disarmed when any re-read starts and whenever the list
+  changes, so another row's Update can no longer leave a one-click permanent delete
+  armed; an embedder with no model name is refused before the picker opens rather than
+  writing vectors under a name the search can never read back.
+- **A method note that cost a reviewer an hour.** Mutation-test, run, restore inside
+  one second, and CPython accepts the stale `.pyc` — it validates bytecode against the
+  source's mtime in whole seconds — so the restored original ran the mutant's code and
+  a test failed for a defect the tree did not have. Purge `__pycache__` after every
+  restore and re-run the baseline before believing a red.
+
+**WHAT SHIPPED — Knowledge phase 3, "Your documents".** A Settings section in EVERY
+profile (the tool behind it is LOW and read-only, owner decision 2 of 2026-08-24, so
+the surface that manages it is not a capability either; nothing in `rpc/knowledge.py`
+asks the mode, and a test holds that), backed by `knowledge.list`, `knowledge.add`,
+`knowledge.reindex` and `knowledge.remove`. **The one design rule shapes every method:
+the shell never reads a document's bytes for the core without a picker in between.**
+Adding reads through a new `shell.pickKnowledgeDocument` — a native dialog filtered to
+text and Markdown, refusing Addison's own data directory, a non-regular file, anything
+over 2 MB and bytes that are not UTF-8, and returning the text with the sha256 of
+exactly the bytes it read. Re-reading — "Update" when the file changed on disk, "Try
+again" after a failed index — opens the SAME dialog pointed at the file, and the person
+confirms; a different file is refused rather than absorbed, because `path` is unique
+and re-pointing a row would turn one document into another under a name they still
+recognise. What the core stores is the path, so it can ask
+`shell.digestKnowledgeDocuments` later whether the file changed (its own method, with
+a bound that matches the document ceiling; see the review round above for why the
+review surface's digest could not be reused) — a digest crosses that bridge, never
+content by path, which would have handed the middle-trust process a
+read-any-file capability the review surface deliberately confined to trusted roots. A
+persistent shell-side consent ledger is the way to buy that convenience back; it is
+recorded as a later option, not as a gap. `onDisk` (same / changed / missing /
+unknown) is computed while the list is answered and never stored, because the answer
+is only true at the moment it is asked. The picker is modal and a local embedding run
+is slow, so add and the re-read half of reindex run on a thread of their own and hand
+the WRITE back to the worker as a `knowledge_commit` job — the thread touches no
+store, and the row is re-read at commit time, since a dialog can stand open for
+minutes and a document can be removed while it does. A document that could not be
+embedded is REMEMBERED, as a failed row carrying the plain sentence and a Try again,
+rather than refused and forgotten. Removal is permanent — the three tables are outside
+restore points by owner decision 4, so no snapshot is taken and the panel says so
+before the second press. **Nothing in any of the three phases has spoken to a real
+Ollama embedding endpoint**; that manual pass is owed and
+[`KNOWN-GAPS.md`](KNOWN-GAPS.md) carries it beside the rest of what phase 3 leaves
+open.
+
+**WHAT SHIPPED — the permission card's command is a field (H9).**
+`permission.requestGrant` carries `command` exactly when the card is the per-call
+"wants to run" shape; `description` is the lead sentence alone. It is built in ONE
+place, `main.build_permission_card`, which the fixture rig calls too, so the payload
+the frontend renders in its tests is the payload the app sends. The card draws the
+command WHOLE — it wraps, keeps its own line breaks, and has neither `truncate` nor a
+`title` tooltip, because hover is not consent and a command cut at an ellipsis is a
+different command from the one being approved. The `run: ` re-parse is deleted:
+`PermissionCard.tsx` no longer reads the core's English, so the core can reword its
+sentence freely, and prose that happens to contain those two words can no longer be
+drawn in the block that means "this is the exact command". A stand-in tool pins that
+case in the fixtures — no shipping tool writes such a sentence today, which is exactly
+why the shape had no defence. **H14 (`open_link` IP vetting) stays open**, awaiting
+the owner.
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner

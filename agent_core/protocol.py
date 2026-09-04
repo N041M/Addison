@@ -542,6 +542,34 @@ class Method:
     SKILL_SET_ENABLED = "skill.setEnabled"     # {id, enabled} -> {ok}
     SKILL_DELETE = "skill.delete"              # {id} -> {ok}
 
+    # Your documents — retrieval over documents a person attached (knowledge phase 3;
+    # docs/plans/knowledge-retrieval-plan.md). ANSWERED IN EVERY MODE: the tool that
+    # searches these is LOW and read-only in both profiles (owner decision 2,
+    # 2026-08-24), so the surface that manages them is not a capability either.
+    #
+    # THE SHELL NEVER READS A DOCUMENT'S BYTES WITHOUT A PICKER IN BETWEEN. Adding
+    # reads through `shell.pickKnowledgeDocument`; re-reading opens the same picker
+    # again, pointed at the file, and the person confirms. The core stores the path
+    # only so it can ask for a DIGEST later (`shell.digestWorkspaceFiles`) — it never
+    # asks the shell to hand over CONTENT by path, because that would give the core a
+    # read-any-file capability the review surface deliberately confined to trusted
+    # roots.
+    KNOWLEDGE_LIST = "knowledge.list"          # {} -> {documents: [<row>]}, newest first
+    # {} -> {ok:true, document:<row>} | {ok:false, cancelled:true} | {ok:false, error}
+    KNOWLEDGE_ADD = "knowledge.add"
+    # {id} -> the same three shapes as add. Opens the picker pointed at the row's
+    # path; a DIFFERENT file is refused rather than silently replacing the document.
+    KNOWLEDGE_REINDEX = "knowledge.reindex"
+    # {id} -> {ok:true} | {ok:false, error}. The chunks and their vectors go with the
+    # row (FK cascade). No restore point: the three knowledge tables are excluded
+    # from snapshots (owner decision 4), so the removal is permanent.
+    KNOWLEDGE_REMOVE = "knowledge.remove"
+    # <row> = {id, displayName, path, status: "pending"|"indexed"|"failed",
+    #          detail: str|null, chunkCount, flaggedChunks, byteSize, addedAt,
+    #          indexedAt: int|null, onDisk: "same"|"changed"|"missing"|"unknown"}
+    # `onDisk` is computed LIVE from one batched `shell.digestWorkspaceFiles` and is
+    # never stored; `sha256` itself never reaches the frontend, which has no use for it.
+
     # Snapshots — GLOBAL FLOOR G3 (guaranteed rollback; amendment §3, spec §4.9).
     # An app-state snapshot is a point-in-time copy of Addison's mutable CONFIG
     # (settings, providers, skills, widgets, routines) — NEVER keys (they
@@ -582,6 +610,20 @@ class Method:
     SHELL_READ_WORKSPACE_FILE = "shell.readWorkspaceFile"       # {path} -> {content}
     SHELL_RESTORE_WORKSPACE_FILE = "shell.restoreWorkspaceFile" # {path, content?|delete} -> {}
     SHELL_PICK_DIRECTORY = "shell.pickDirectory"                # {} -> {path} (native folder picker)
+    # {suggestedPath?} -> {path, displayName, byteSize, sha256, content}. The ONE way
+    # a document's bytes reach the core for indexing (knowledge phase 3), and it is a
+    # PICKER every time: adding opens it empty, re-reading opens it pointed at the
+    # row's path so the person confirms the same file again. The shell refuses
+    # Addison's own data dir, a non-regular file, anything over 2 MB, and bytes that
+    # are not UTF-8 — each in its own plain sentence the core relays untouched.
+    SHELL_PICK_KNOWLEDGE_DOCUMENT = "shell.pickKnowledgeDocument"
+    # {paths} -> {digests: {<path>: {sha256|null, missing}}}. "Has this document
+    # changed since Addison read it?", asked of the size class of file a PERSON picks
+    # — up to 2 MB, where `shell.digestWorkspaceFiles` stops at 256 KB because that is
+    # the size class of file Addison itself wrote. Sharing that method meant sharing
+    # its smaller ceiling, so every document over 256 KB answered "can't tell" and the
+    # panel offered no Update after an edit. Same batch cap, same never-fails shape.
+    SHELL_DIGEST_KNOWLEDGE_DOCUMENTS = "shell.digestKnowledgeDocuments"
     # The review surface's read paths (Phase-3 plan Build §1), reached ONLY from
     # `workspace.listDirectory` / `workspace.readFile` — never from a tool. The shell
     # opens both with its own data-dir floor, lists with `symlink_metadata` (a link is

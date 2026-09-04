@@ -22,7 +22,12 @@ from __future__ import annotations
 import pytest
 
 from agent_core.protocol import Method
-from agent_core.shell_bridge import _EXEC_SLACK_MS, _KEYCHAIN_TIMEOUT, IpcShellBridge
+from agent_core.shell_bridge import (
+    _EXEC_SLACK_MS,
+    _KEYCHAIN_TIMEOUT,
+    _PICKER_TIMEOUT,
+    IpcShellBridge,
+)
 
 # A stand-in secret. Long and distinctive so a "did this leak?" scan cannot pass
 # by accident on a substring of something else.
@@ -208,6 +213,19 @@ _BRIDGE_CALLS = (
     # same reason the note below records: a person is in front of both dialogs, and
     # whether that deserves the human-paced budget is a separate call from this one.
     ("pick_file", ()),
+    # The document picker (knowledge phase 3) is the ONE picker on the person-paced
+    # budget, and it got there by review. It was left with its two siblings on the
+    # default, which meant that somebody who spent a minute looking for the file got
+    # "Addison couldn't finish that just now" — a sentence about a wedged shell, for a
+    # dialog that was working perfectly and still standing open in front of them.
+    # `_KEYCHAIN_TIMEOUT`'s argument, reached from the other side: a person is not a
+    # process, and giving up does not close the dialog. Past even ten minutes the
+    # raise is a `ShellCallTimeout`, and `knowledge.add` answers its own plain
+    # sentence for that alone (`rpc/knowledge.py::_PICKER_TIMED_OUT`).
+    #
+    # Its two siblings are still on the default budget: moving them is a separate call
+    # with its own callers to check, and this table is where that stays visible.
+    ("pick_knowledge_document", (None,)),
     ("get_app_build_ref", ()),
     ("get_provider_key", ("anthropic",)),
     # The messaging-channel token (phase 1). Person-paced like every other
@@ -250,6 +268,11 @@ _BRIDGE_CALLS = (
     # from either is a wedged shell, not a slow answer.
     ("can_restore_workspace_files", (["/tmp/project/a.py"],)),
     ("digest_workspace_files", (["/tmp/project/a.py"],)),
+    # "Has this document changed?" (knowledge phase 3). DEFAULT budget, unlike the
+    # picker it serves: nobody is in front of this one. It is the same loop as
+    # `digest_workspace_files` at a bigger per-file ceiling, and bounded the same two
+    # ways — 200 paths, and a size bound per file.
+    ("digest_knowledge_documents", (["/Users/mira/Notes.txt"],)),
     ("adopt_workspace_path", ("/tmp/project/a.py", "a" * 64)),
 )
 
@@ -298,9 +321,15 @@ def test_only_the_keychain_calls_wait_at_a_persons_pace():
     the short budget is the bug this fixes; a file or clipboard call quietly given
     the long one turns a wedged shell into a ten-minute hang with no explanation.
 
-    (The folder and file pickers also wait on a person. They were deliberately
-    left on the default budget by this change — a separate call to make, and the
-    table makes it visible rather than implied.)
+    THE DOCUMENT PICKER IS THE THIRD BUDGET, and it is the keychain's argument
+    reached from the other side: a native file dialog waits on a person too, and
+    abandoning the request at sixty seconds does not close the dialog — it only
+    guarantees that the document eventually chosen is read, hashed, sent and
+    dropped while the panel that asked has already shown a failure.
+
+    (The folder and file pickers wait on a person as well and are still on the
+    default budget. Moving them is a separate call, with their own callers to
+    check; this table is what keeps that visible rather than implied.)
     """
     named = {name for name, _ in _BRIDGE_CALLS}
     public = {
@@ -318,6 +347,11 @@ def test_only_the_keychain_calls_wait_at_a_persons_pace():
             assert timeout == _KEYCHAIN_TIMEOUT, method
         elif method == Method.SHELL_RUN_COMMAND:
             assert timeout == _COMMAND_BUDGET_SECONDS, method
+        elif method == Method.SHELL_PICK_KNOWLEDGE_DOCUMENT:
+            # Mutation: drop the `timeout=` on `pick_knowledge_document` and this
+            # fails — a minute in front of a file dialog goes back to reading as a
+            # wedged shell.
+            assert timeout == _PICKER_TIMEOUT, method
         else:
             assert timeout is None, method   # None = the instance/default budget
 

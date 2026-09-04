@@ -1508,6 +1508,28 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "```bash\ncd shell && npm run tauri dev\n```\n"
         ),
     },
+    "knowledge-is-built": {
+        "a dated record of the phase where the index existed and nothing searched": (
+            "**Built 2026-08-24: phase 1 of Knowledge — the index, and nothing "
+            "retrieves.**"
+        ),
+        "\"built\" used as an ordinary verb, with its object after it": (
+            "Knowledge phase 1 built the three tables and the chunker; phase 2 "
+            "registered the tool."
+        ),
+        "a recount of the weeks before the surface, in the past tense": (
+            "Until phase 3, nothing in the app could add a document, so the tool "
+            "answered that there were none to search."
+        ),
+        "the alternative this feature recorded and deliberately did not build": (
+            "A persistent shell-side consent ledger is recorded as a later option and "
+            "not built; it is a new trust surface and nothing here needs one."
+        ),
+        "today's polarity stated plainly, which is the point of the row": (
+            "Phase 3 landed 2026-09-04: Settings has a \"Your documents\" section in "
+            "every profile, and removal is permanent."
+        ),
+    },
 }
 
 
@@ -1949,6 +1971,45 @@ _MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
             "the two-track definition asserted after the surface leaves the phase": (
                 "Phase 3 also carries the Developer review surface: a file tree, a "
                 "read-only viewer, a diff and per-file revert."
+            ),
+        },
+    },
+    "knowledge-is-built": {
+        "while_true": {
+            "docs/README.md's plans row, which said this from the day it was written": (
+                "| [`knowledge-retrieval-plan.md`](plans/knowledge-retrieval-plan.md) | "
+                "**PROPOSED 2026-08-24, nothing built.** Retrieval over documents you "
+                "attach: the module split the boundary rule forces |"
+            ),
+            "KNOWN-GAPS' entry, wrapped between the claim and its date as it was": (
+                "- **Knowledge: retrieval over person-attached files. DECIDED, AND "
+                "PHASE 1 BUILT\n  2026-08-24** "
+                "([knowledge-retrieval-plan.md](plans/knowledge-retrieval-plan.md) owns"
+            ),
+            "the same entry's account of what was left to do": (
+                "  the design, the four answered owner decisions and the two phases "
+                "still to build;"
+            ),
+            "the plan's own status line while the surface was scheduled": (
+                "Phase 3 (the Settings surface) is scheduled and not built."
+            ),
+            "the shape a stale surface claim would most likely take next": (
+                "The Settings surface is still to come, so nothing can add a document "
+                "yet."
+            ),
+        },
+        "while_false": {
+            "the four methods named after the namespace is gone": (
+                "The section is backed by `knowledge.list`, `knowledge.add`, "
+                "`knowledge.reindex` and `knowledge.remove`."
+            ),
+            "the picker asserted after the shell arm is removed": (
+                "Adding reads through a new `shell.pickKnowledgeDocument` — a native "
+                "dialog filtered to text and Markdown."
+            ),
+            "the Settings section offered when there is no such section": (
+                "Settings has a **\"Your documents\"** section, in every profile, where "
+                "you add a document through the file picker."
             ),
         },
     },

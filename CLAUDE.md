@@ -17,7 +17,7 @@ exactly one owner** — a second mention anywhere is a link, never a copy.
 | The Windows port — what changed, what is owed | [`docs/plans/windows-port-plan.md`](docs/plans/windows-port-plan.md) |
 
 **[`docs/README.md`](docs/README.md) is the full map** — every file, what it owns,
-and the rule that keeps it that way. **The twelve `*-plan.md` documents live in
+and the rule that keeps it that way. **The thirteen `*-plan.md` documents live in
 `docs/plans/`, which is gitignored** (owner decision 2026-08-24), so a fresh clone
 does not have them and several links here point at files it cannot open; the map's
 "Plans" section states what that costs, and `BUNDLED_PLANS` in

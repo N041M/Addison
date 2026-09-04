@@ -55,129 +55,119 @@ Two things it cannot check, both learned the hard way the same day:
 
 ## Next up
 
-**START HERE: the manual real-Telegram pass.** Messaging channels phases 1–3 are
-BUILT and merged (2026-08-22, PRs #143–#145;
-[`messaging-channel-plan.md`](plans/messaging-channel-plan.md) owns the design and the
-eleven answered owner decisions), and **nothing in the tree has ever spoken to
-real Telegram** — every test runs against `httpx.MockTransport` and Telegram's
-published limits. The pass needs the OWNER'S hands for one step: a bot token from
-@BotFather, pasted into Settings → "Your phone" by the owner themselves (it is a
-credential; the assistant never touches it). Then, in order: connect ("Check
-now" shows the bot's name), enable, pair a phone with the desktop-shown code, and
-check (a) a lookup and a calculation answer from the floor, (b) *"add a line to my
-notes file"* comes back with the full refusal sentence AND the note appears under
-the panel's pending block without a manual refresh (the `channel.requestQueued`
-frame), (c) "Ask this here" lands the sentence in the desktop composer and the
-card appears only after Send, (d) Dismiss clears it, (e) the `on_wake` setting
-both ways (default declines a stale message; 'answer' answers it late), (f) the
-queue is empty after a restart. **Before believing anything on a live screen,
-prove the build from inside the page** — the webview-cache fossil trap below.
+**START HERE: two pull requests are open and green, and the owner merges them in
+order.** [PR #156](https://github.com/N041M/Addison/pull/156) (the permission card's
+command as a field, H9) first, then [PR #157](https://github.com/N041M/Addison/pull/157) (Knowledge phase 3, which carries
+the day's build-log entry for both). Both passed every CI job including the two
+Windows runners; both went through an adversarial review, a fix round and a
+regression pass over the fixes. After the merge, fast-forward the main checkout at
+`/Users/karel/Desktop/Addison` (it serves `tauri dev`) and delete the three
+`claude/knowledge-phase-3*` and `claude/permission-card-command` worktrees under
+`.claude/worktrees/`.
 
-**Then the queue behind it, in the order that pays best:**
+**Then the manual passes, which need a person at the keyboard:**
 
-1. **The menu-bar popup chat window** (approved owner scope, 2026-08-22 decision
-   4): background operation plus a small popup chat on a menu-bar item. It is
-   approved in DIRECTION only — the plan's own rule is that it gets its own design
-   section in `messaging-channel-plan.md` before anything builds it (a resident
-   process and a second chat surface each have their own trust story). Write the
-   section, get the owner's yes on its specifics, then build.
-2. **The review surface's §13c manual pass** (`TESTING-CHECKLIST.md`), still live
-   and unrun — the widened CSP is enforced by a real webview and by nothing else.
-   The bright line if it fails: do not widen `script-src` or admit `blob:`.
-3. **Phase 3's packaging track**: signing, notarisation, the auto updater
-   (`updater.rs` is a nine-line stub and the tree's only `TODO(step N)`),
-   previous-binary restore, Secure Enclave identity.
-4. **Parked owner decisions** (KNOWN-GAPS): the explicit-pick-vs-Cost-first
-   precedence rule (the UI half shipped 2026-08-22 as the composer's "Answered
-   by" line; the rule itself is still open), the `open -a Addison` automation
-   question, the Custom workspace-trust guard question, the `revertable`
-   tri-state wire change.
-5. **The judged feature queue**: Knowledge/retrieval is next (its screening
-   prerequisite is met; the clean shape is recorded in KNOWN-GAPS), then per-task
-   model assignment (`model-assignments-plan.md`, proposed), then
-   notes-as-attachment. **Phase 4 of the channels plan (approving actions from a
-   phone) is DEFERRED, not queued** — the owner's horizon for that is a bespoke
-   phone app, which is not designed anywhere yet.
+1. **The real-Ollama pass for Knowledge** — nothing in three phases has spoken to a
+   real embedding endpoint. Ollama is NOT installed on this Mac (`which ollama` finds
+   nothing); it needs `brew install ollama` and `ollama pull nomic-embed-text`, then
+   [`TESTING-CHECKLIST.md`](TESTING-CHECKLIST.md) §17 end to end, in Simple AND
+   Developer, on a proven-fresh bundle (the webview-cache fossil trap below applies:
+   clear BOTH cache directories and prove the build from inside the page first).
+2. **The real-Telegram pass** for messaging channels (unchanged from 2026-08-22; the
+   owner's own bot token, pasted by the owner).
+3. **The review surface's §13c pass** (unchanged).
 
-## What changed on 2026-08-22, in one paragraph each
+**Then the queue behind them, in the order that pays best:**
 
-One session, eleven PRs (#136–#145 plus the plan's #141/#142), all merged same
-day at the owner's direction. `BUILD-LOG.md` owns the findings (five entries for
-the day, "(second)" through "(fifth)" plus the channels entries); these are the
-ones that change how you read the tree.
+1. **One owner decision the day surfaced, cheap once decided: H14 in the
+   test-hardening plan.** `open_link` validates only the scheme while `read_web_page`
+   vets addresses through `net_vetting`, so injected page text can steer Addison to
+   open a router admin URL in the person's real browser. The mechanism is one call;
+   the decision is whether a LAN or loopback link is refused outright, carded per
+   invocation, or allowed — a developer opening `localhost:3000` is the case that
+   makes it a decision.
+2. **The image-attach train** ([#148](https://github.com/N041M/Addison/pull/148)
+   → #149 → #150 → #151 → #152, built 2026-08-23, all still open). #148 conflicts
+   with master and commits its plan at `docs/image-attach-plan.md`, which the
+   2026-08-24 decision moved into the gitignored bundle. The owner's calls first:
+   close [#147](https://github.com/N041M/Addison/pull/147) as superseded (carry its
+   document-input scope forward later) and close
+   [#130](https://github.com/N041M/Addison/pull/130), whose strikes master already
+   carries. Then rebase the train, relocate the plan, add its `BUNDLED_PLANS` row.
+3. **The menu-bar popup chat window** (approved in direction only; needs its design
+   section in `messaging-channel-plan.md` and the owner's yes on specifics).
+4. **Phase 3's packaging track** (signing, notarisation, `updater.rs`).
+5. **The parked owner decisions in KNOWN-GAPS** (explicit-pick-vs-Cost-first
+   precedence, the `open -a Addison` question, the Custom workspace-trust guard, the
+   `revertable` tri-state).
+6. **The judged feature queue**: per-task model assignment
+   (`model-assignments-plan.md`, proposed), then notes-as-attachment. Knowledge has
+   left this list.
 
-- **The progressive-markdown streaming was reworked** (#136): every frame is now a
-  fresh parse of the true prefix cut at the last newline behind the scramble's
-  resolved edge; no frozen boundaries, no never-the-last-node rule, and the fence
-  machinery (`fenceEndOffset`/`tailIsFence`) is deleted. Blocks are keyed by
-  content hash. Verified LIVE on a proven-fresh bundle: a table ending an answer
-  renders from its header and grows row by row.
-- **Three thread features landed** (#137–#139): the composer's "Answered by"
-  disclosure (derived from the thread, never stashed — staleness across a
-  conversation switch is unrepresentable), Highlight → Ask/Explain (a selection
-  popover seeding the composer with a blockquote; `SelectionAsk.tsx`), and
-  truncation-aware Continue — which found **three provider adapters erasing the
-  stop reason** (google never read `finishReason`, ollama never read
-  `done_reason`, openai's non-streaming path collapsed it). Cap spellings now
-  live on `ProviderCapabilities.truncation_finish_reasons`, membership-tested by
-  the orchestrator with no literal anywhere.
-- **Messaging channels went from nothing to built in one day**: plan written
-  (#141), all eleven owner decisions answered and recorded in the plan's §5
-  (#142), then phases 1–3 (#143–#145). What changes how you read the tree:
-  `channels.enabled` is saved INTENT and `ChannelService` is the truth — nothing
-  starts a poll loop at launch, and every surface reads live state (step 8's
-  lesson); `rpc/channels.py` carries a deliberate import fence (no httpx/
-  threading/tools imports, AST-tested); the poll loop is a reviewed entry in
-  `test_g2_no_self_trigger.py`'s `_REVIEWED_THREAD_TARGETS`; the remote floor is
-  a closed three-id set proven a SUBSET of `visible_tools(SAFE)` at two test
-  sites plus a `doc_claims` row; and `PendingRequest` carries no tool id or
-  arguments — the dataclass shape IS the no-replay guarantee.
-- **The step-1 deferral ledger, for CLAUDE.md's pointer**: the only still-open
-  item is `tool_grants` capture — excluded from snapshots because restoring a
-  grant revoked after the snapshot would reinstate a privilege through the
-  deliberately ungated one-action restore; if ever captured it must be an
-  INTERSECT, never a replace. Everything else from that ledger landed and is
-  named in CLAUDE.md itself.
+## What changed on 2026-09-04, in one paragraph each
 
-## Traps found on 2026-08-22, worth a minute before live-verifying anything
+`BUILD-LOG.md` owns the findings (one entry, "What shipped 09-04", for both pieces of
+work). These are the ones that change how you read the tree.
 
-- **The fossil trap has a SECOND DOOR: the webview's own cache.** A freshly built,
-  freshly launched debug bundle (old bundle deleted, process path verified) still
-  served a stale `index-*.js` out of `~/Library/WebKit/app.addison.desktop` and
-  `~/Library/Caches/app.addison.desktop` — a script existing nowhere on disk
-  outside the cache — faking "feature missing" for a whole merged wave. Clear
-  both cache directories before a live pass, and prove the build from INSIDE the
-  page: `Array.from(document.scripts).map(s => s.src)` in the inspector must
-  match the hash in `shell/dist/index.html`. The BUILD-LOG's 08-22 fossil entry
-  owns the full story.
-- **Commit BEFORE mutation-testing.** Restoring a mutated file with
-  `git checkout -- <file>` restores HEAD — which, on uncommitted work, wipes the
-  work. It happened once and was recovered only because the file had been read
-  into context in full.
-- **A spy tool's NAME can silently invalidate a test.** An orchestrator pin used a
-  spy named `calculator`; when the remote floor later admitted that id, the test
-  stayed green while its asserted sentence ("a remote turn may not reach a tool
-  at all") went false. When a closed set changes, grep the test fixtures for the
-  ids it now contains.
-- **`httpx` exception strings carry the URL, and some APIs put credentials in the
-  URL.** Telegram's bot API does. Every raise in an adapter names a frozen
-  constant, no `from exc` chaining, and a test asserts the token reaches no
-  request body, row, payload or database byte. Any future adapter must keep this.
+- **Knowledge phase 3 landed: the Settings section "Your documents", in every
+  profile.** `rpc/knowledge.py` (`knowledge.list/add/reindex/remove`), one new shell
+  method `shell.pickKnowledgeDocument` (text and Markdown, 2 MB, UTF-8, the data-dir
+  floor, sha256 of the bytes read) and one new digest method
+  `shell.digestKnowledgeDocuments` with its own bound. **The design rule: the shell
+  never reads a document's bytes for the core without a picker in between** — Update
+  and Try again re-open the picker on the file. Add runs worker → thread → worker
+  (`knowledge_commit`); the thread touches no store. Nothing has spoken to real Ollama.
+- **Four native dialogs came off the shell's stdout pump.** `dispatch_dialog_off_loop`
+  in `agent_process.rs` spawns `shell.pickFile`, `shell.pickDirectory`,
+  `shell.pickKnowledgeDocument` and `shell.saveNewFile` off the reader loop. Before today, every Core→Frontend
+  frame stalled while a picker stood open, and a Core→Shell request made from the
+  worker meanwhile died at the bridge's sixty-second ceiling.
+- **The permission card's command is a field** (PR #156): `permission.requestGrant`
+  carries `command`; `description` is the lead sentence; `PermissionCard.tsx` parses
+  nothing. **Found in passing: `normalizePermission` in `App.tsx` had never copied
+  `preview`, so the delete preview (2026-08-13) and the routine-sharing taint line
+  (2026-08-15) never reached a card in the running app.** Fixed there; KNOWN-BUGS #16.
+- **A claim row now guards Knowledge's status** (`knowledge-is-built` in
+  `tests/doc_claims.py`): the docs map, KNOWN-GAPS and HANDOFF all said "nothing
+  built" or "phase 1 only" for eleven days after phases 1–2 merged, and no row saw it.
 
-## Branch and PR state (verified 2026-08-22)
+## Traps found on 2026-09-04, worth a minute before mutation-testing anything
 
-**No PR open; no feature branches remain. `master` carries everything through
-#145.** The four feature PRs #136–#139, the docs PRs #140–#142, and the channel
-phases #143–#145 were merged sequentially with conflicts resolved by rebase (the
-same-day BUILD-LOG entries are stacked "(second)" through "(fifth)" per the
-file's convention). One older PR was left alone deliberately: **#130**
-(KNOWN-BUGS doc strikes, from an earlier session) — the owner's to merge or
-close; its branch `claude/strike-known-bugs` is checked out in another worktree.
-The `archive/*` branches are named history and stay. **The main checkout at
-`/Users/karel/Desktop/Addison` serves `tauri dev` and was fast-forwarded to
-#145's merge** — after any worktree-side merge, pull it forward or the owner
-watches stale code (the 08-22 BUILD-LOG entry records the hour that costs).
+- **Restore-within-a-second leaves a poisoned `.pyc`.** CPython validates bytecode
+  against the source mtime in WHOLE SECONDS, so mutate → run → restore inside one
+  second makes the next run execute the mutant from `__pycache__` while the source is
+  byte-identical to HEAD. Two reviewers lost time to it today. Purge
+  `agent_core/**/__pycache__` after every restore and re-run the baseline before
+  believing a red.
+- **The `.gitignore` rule `node_modules/` matches directories, not symlinks.** A
+  worktree's `shell/node_modules` symlink to the main checkout's install gets swept up
+  by `git add -A`. Add files by name in worktrees, or `git rm --cached` it before
+  merging (it happened once today and was caught at the merge).
+- **`pyrightconfig.json`'s `venvPath` is relative, so pyright in a worktree reports
+  phantom missing imports.** Pass `--pythonpath /Users/karel/Desktop/Addison/agent_core/.venv/bin/python`.
+  Real result today: 0 errors on both branches.
+- **A fix is new code, sixth instance.** Sending `command` as a field made the expired
+  arming card draw the automation's NAME in the command block (its per-call detail is a
+  name). The regression pass over the fixes is not optional.
+- **Two size bounds can each be right and jointly wrong.** The picker admitted 2 MB;
+  the digest answered "cannot tell" above 256 KB; nothing related them, so "changed on
+  disk" was unreachable for most documents the feature exists for. When a new surface
+  reuses an old bound, read the comment that justifies the number.
 
+## Branch and PR state (verified 2026-09-04)
+
+- **Open, green, awaiting the owner:** [PR #156](https://github.com/N041M/Addison/pull/156)
+  `claude/permission-card-command` and [PR #157](https://github.com/N041M/Addison/pull/157) `claude/knowledge-phase-3`
+  (which absorbed `claude/knowledge-phase-3-ui`; the UI branch is not pushed and can be
+  deleted). Merge #156 first.
+- **Open and stale, the owner's to resolve:** #147, #148–#152 (the image-attach
+  train; #148 conflicts with master), #130 (superseded).
+- **Worktrees under `.claude/worktrees/`:** `knowledge-phase-3`, `knowledge-phase-3-ui`,
+  `permission-card-command` are today's and can go after the merge; the three
+  detached ones from August (`app-development-*`, `gracious-villani-*`,
+  `wonderful-shannon-*`) are older sessions' and were left alone.
+- The `archive/*` branches are named history and stay. **The main checkout is still
+  at #155's merge (`21ff450`)** — fast-forward it after merging.
 
 ## Three commits on `master` are red, and it is not what you think
 
@@ -227,9 +217,10 @@ was that a mutation which *should* have killed something did not.
 ## Where the project stands
 
 - v1 (spec §11, steps 1–11), **all eight Phase-2 steps**, Phase 3's Developer
-  review surface, and now **messaging channels phases 1–3** are implemented and
-  merged. What is left of Phase 3 is the packaging track. The channels' phase 4
-  is deferred toward a bespoke phone app. `ROADMAP.md` owns status.
+  review surface, **messaging channels phases 1–3**, the Windows port's phase 1 and
+  **all three phases of Knowledge** (phase 3 in the open PR) are implemented. What is
+  left of Phase 3 is the packaging track. The channels' phase 4 is deferred toward a
+  bespoke phone app. `ROADMAP.md` owns status.
 - Addison is a **butler**: Developer = a Claude-Code-class coding harness; Simple
   = an all-in-one companion; Custom tunes prompting guards — and since
   2026-08-22 a paired phone can converse with it and use a three-tool read-only

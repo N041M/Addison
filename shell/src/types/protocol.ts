@@ -315,6 +315,34 @@ export const Method = {
   McpRemove: "mcp.remove",
   McpRefresh: "mcp.refresh",
 
+  // Your documents — the knowledge base's Settings face (knowledge retrieval,
+  // phase 3 of three). A document you pick is chunked, screened and indexed on
+  // this computer, and Addison searches it when you ask something. All four
+  // answer in EVERY profile: the search tool is LOW and read-only, so Simple has
+  // it too (owner decision 2, 2026-08-24), and a page listing somebody's own
+  // documents must never empty itself on a profile switch.
+  //
+  // ADDING AND RE-READING ALWAYS GO THROUGH THE OS PICKER. The core stores a
+  // path so it can ask the shell for a DIGEST later, and never asks the shell to
+  // hand over a file's CONTENT by path — that would be a read-any-file ability
+  // for the middle-trust process, which the review surface deliberately confined
+  // to trusted folders. So `knowledge.add` takes no arguments, and
+  // `knowledge.reindex` takes an id and re-opens the picker on that file for the
+  // person to confirm.
+  //
+  // A row carries no `sha256` (this side has no use for one) and no document
+  // text. `onDisk` — "same" | "changed" | "missing" | "unknown" — is computed
+  // live while `knowledge.list` is answered and is never stored, so a row cannot
+  // go on claiming a file is there after it has gone.
+  //
+  // Removal is PERMANENT: the three knowledge tables are excluded from restore
+  // points (owner decision 4), the same way `tool_grants` is, so no restore
+  // reinstates a document somebody removed. Mirrored in protocol.py.
+  KnowledgeList: "knowledge.list",
+  KnowledgeAdd: "knowledge.add",
+  KnowledgeReindex: "knowledge.reindex",
+  KnowledgeRemove: "knowledge.remove",
+
   // Automations — the work Addison writes down for YOUR COMPUTER to run on a
   // schedule (Phase-2 step 8, phase 1 of four). Addison never runs anything by
   // itself and never sets a timer of its own: the operating system runs the job,
@@ -390,6 +418,16 @@ export const Method = {
   ShellReadWorkspaceFile: "shell.readWorkspaceFile",
   ShellRestoreWorkspaceFile: "shell.restoreWorkspaceFile",
   ShellPickDirectory: "shell.pickDirectory",
+  // The knowledge base's one way in (phase 3). The shell opens the picker, reads
+  // the bytes ONCE, and answers with the text plus its digest; there is no second
+  // method that reads a document by path afterwards, which is what keeps "the
+  // core may not read any file it names" true while a knowledge base exists.
+  ShellPickKnowledgeDocument: "shell.pickKnowledgeDocument",
+  // "Has this document changed since Addison read it?" — the same question
+  // `shell.digestWorkspaceFiles` answers, at the size class of file a person may
+  // pick (2 MB, where that one stops at 256 KB). Core -> Shell only; the window
+  // never calls it.
+  ShellDigestKnowledgeDocuments: "shell.digestKnowledgeDocuments",
   // The review surface's read paths (Phase 3). Reached only from the core's
   // `workspace.listDirectory` / `workspace.readFile`, never from here.
   ShellListWorkspaceDirectory: "shell.listWorkspaceDirectory",

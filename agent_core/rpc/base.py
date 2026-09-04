@@ -129,6 +129,13 @@ class ServerContext:
         # constraint c).
         _channel_conversations: dict[str, Conversation]
         _mcp_discover: Callable[[str], Discovery]
+        # Knowledge phase 3. The SAME lazily-built KnowledgeIndexer `search_knowledge`
+        # reaches through (`main._live_embedder`), and never a second one: two would
+        # mean two models, and a document embedded with one is invisible to a search
+        # made with the other. Duck-typed (`.model`, `.prepare`, `.embed`) so this
+        # declaration does not drag a provider import into every mixin — the same
+        # late-bound shape the tool uses, for the same reason.
+        _embedder_ref: Callable[[], Any] | None
         _setup_prompt: str | None
         _primary_prompt: str | None
         _perm_lock: threading.Lock

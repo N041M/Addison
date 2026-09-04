@@ -208,9 +208,11 @@ exact same registry and gate as the live loop.
 mixins in `agent_core/rpc/`, one module per method namespace (`conversation`,
 `undo`, `routines`, `profile`, `models`, `providers`, `widgets`, `skills`,
 `snapshots`, `guards`, `routing`, `cost_plan`, `workspace`, `mcp` (the external
-tool servers of step 7), `automations` (the rows step 8 authors for the OS to run)
-and `channels`, the phone connections of the messaging-channel plan), each of which
-is also the sole camelCase mapper at the wire boundary for its own namespace.
+tool servers of step 7), `automations` (the rows step 8 authors for the OS to run),
+`channels` (the phone connections of the messaging-channel plan) and `knowledge`,
+the documents a person attached for retrieval and the Settings surface that adds,
+re-reads and removes them), each of which is also the sole camelCase mapper at the
+wire boundary for its own namespace.
 
 ```mermaid
 flowchart LR

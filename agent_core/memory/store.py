@@ -1916,7 +1916,7 @@ class Store:
 
     def index_document(
         self, *, doc_id: str, sha256: str, rows: list[dict[str, Any]], model: str, dim: int,
-        indexed_at: int,
+        indexed_at: int, byte_size: int | None = None,
     ) -> None:
         """Replace this document's chunks and vectors, and mark it indexed.
 
@@ -1924,6 +1924,14 @@ class Store:
         leave chunks from the old one behind, and the old ordinals are not the new
         ordinals. The FK cascade takes the embeddings with the chunks, so the vectors
         cannot outlive the text they were made from.
+
+        ``byte_size`` rides along because a re-index reads the file AGAIN and the file
+        may have changed — that is the usual reason somebody presses Update. Leaving
+        the column at what the first read recorded would put a stale number on the
+        row beside a fresh digest, which is the one combination that reads as a fact
+        and is not one. It is optional so a caller that has nothing new to say about
+        the size (the phase-1 and phase-2 tests, which index the same text twice)
+        leaves the recorded one alone rather than being made to repeat it.
         """
         with self._conn:  # one transaction; any raise rolls the whole thing back
             self._conn.execute("DELETE FROM knowledge_chunks WHERE document_id = ?", (doc_id,))
@@ -1942,9 +1950,16 @@ class Store:
                 )
             self._conn.execute(
                 "UPDATE knowledge_documents SET status = 'indexed', sha256 = ?, "
-                "chunk_count = ?, flagged_chunks = ?, indexed_at = ?, detail = NULL "
+                "chunk_count = ?, flagged_chunks = ?, indexed_at = ?, detail = NULL, "
+                # COALESCE, not a second UPDATE: the size is written inside the same
+                # transaction as the chunks it describes, so no reader can ever see a
+                # row whose byte_size belongs to one read and whose chunks belong to
+                # another. NULL means "nothing new to say", and the column keeps
+                # whatever the last read recorded.
+                "byte_size = COALESCE(?, byte_size) "
                 "WHERE id = ?",
-                (sha256, len(rows), sum(r["flagged"] for r in rows), indexed_at, doc_id),
+                (sha256, len(rows), sum(r["flagged"] for r in rows), indexed_at,
+                 byte_size, doc_id),
             )
 
     def fail_knowledge_document(self, *, doc_id: str, detail: str) -> None:
@@ -1956,10 +1971,41 @@ class Store:
         self._conn.commit()
 
     def list_knowledge_documents(self) -> list[dict[str, Any]]:
+        """Every document, newest first.
+
+        ``rowid DESC`` breaks the same-second tie, exactly as
+        ``list_config_snapshots`` does and for the same reason: ``added_at`` is whole
+        seconds, two documents added one after the other routinely share one, and
+        without a tiebreak the order of the top of the list is whatever SQLite
+        happened to return. Somebody who has just added a document looks at the top of
+        the list, so that is the one position that must not be arbitrary."""
         rows = self._conn.execute(
-            "SELECT * FROM knowledge_documents ORDER BY added_at DESC"
+            "SELECT * FROM knowledge_documents ORDER BY added_at DESC, rowid DESC"
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_knowledge_document(self, doc_id: str) -> dict[str, Any] | None:
+        """One document by id, or None when it is not there any more.
+
+        BY ID, not by walking ``list_knowledge_documents``: every caller of this is
+        acting on a row the person clicked, and the id is the only thing that
+        survives a rename or a re-index."""
+        row = self._conn.execute(
+            "SELECT * FROM knowledge_documents WHERE id = ?", (doc_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def knowledge_document_at_path(self, path: str) -> dict[str, Any] | None:
+        """The document already added for ``path``, or None.
+
+        ``path`` is UNIQUE in the schema, so this is the question "would adding this
+        file be a duplicate?" asked before the insert that would raise. The insert is
+        still the authority — this is a lookup so the answer can be a plain sentence
+        naming what to do instead, rather than an integrity error."""
+        row = self._conn.execute(
+            "SELECT * FROM knowledge_documents WHERE path = ?", (path,)
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def remove_knowledge_document(self, doc_id: str) -> bool:
         """Delete a document, its chunks and their vectors. True if one went."""

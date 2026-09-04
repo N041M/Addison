@@ -179,8 +179,23 @@ decisions of the same day set the shape: screening happens once when the documen
 added rather than on every query, both profiles will get the search when it lands,
 Addison refuses rather than sending a private document to a cloud provider when no
 local model is available, and a restore never puts back a document you removed.
+
+**Phase 3 landed 2026-09-04, and with it the feature: the surface.** Settings has a
+**"Your documents"** section, in every profile, where you add a document through the
+file picker and see what Addison made of it — how many passages, how many of those
+contain writing shaped like an instruction, whether the file has changed since
+Addison read it or gone missing — and where you re-read one or remove it. A document
+Addison could not read, because no embedding model is running on the machine, is
+remembered as a row that says so in plain words with a Try again beside it. Removing
+is permanent and the panel says that before you press it a second time: the knowledge
+tables are deliberately outside restore points, and the file on your computer is left
+alone. **Adding, updating and trying again all open the picker**, every time: the
+shell never hands the engine a document's contents without you choosing the file, so
+what Addison keeps is a path it can ask questions about, never permission to read
+whatever is at it. Plain text and Markdown, up to 2 MB.
 [docs/plans/knowledge-retrieval-plan.md](docs/plans/knowledge-retrieval-plan.md) owns
-it. Nothing in it has spoken to a real embedding endpoint yet.
+it, and [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) carries what phase 3 leaves open.
+Nothing in it has spoken to a real embedding endpoint yet.
 
 **Built 2026-08-23, beside those tracks: phase 1 of the Windows port.** The tree
 compiles for `x86_64-pc-windows-msvc` and passes `clippy -D warnings` there; the
@@ -413,7 +428,10 @@ Not because they are hard. They were looked at and put down on purpose.
   **Two narrower forms are NOT rejected.** The first is now BUILT (5.6,
   2026-08-13): when a command would delete something, the card also says how much
   that is ("About to delete 1,240 files in 12 folders"), counted by looking at
-  the folder, with no sandbox and nothing run. The second, a copy-on-write clone
+  the folder, with no sandbox and nothing run. **It reached a card only from
+  2026-09-04**, though: the sentence was computed and sent from the day it was
+  built, and the frontend dropped the field on the way in, so nobody using the app
+  ever saw it until that was fixed. The second, a copy-on-write clone
   for the file-only subset, is still an open question in
   [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md), which owns both.
   Isolating *foreign code* is also

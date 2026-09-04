@@ -27,7 +27,13 @@ import {
   type WorkspaceListing,
   type WorkspaceRevertResult,
 } from "../types/protocol";
-import { asRecord, normalizeUnavailable } from "../lib/parse";
+import {
+  asRecord,
+  normalizeUnavailable,
+  parseKnowledgeDocuments,
+  parseKnowledgeMutation,
+  type KnowledgeMutationResult,
+} from "../lib/parse";
 import {
   parseConversationSummaries,
   type ConversationSummary,
@@ -52,6 +58,7 @@ import {
   type EndpointProposal,
   type CostPlan,
   type WorkspaceRoot,
+  type KnowledgeDocument,
   type McpServer,
   type McpServerStatus,
   type McpDiscoveredTool,
@@ -694,6 +701,35 @@ export const ipc = {
     call(Method.McpRemove, { id }).then(parseMcpMutation),
   refreshMcpServer: (id: string): Promise<McpRefreshResult> =>
     call(Method.McpRefresh, { id }).then(parseMcpRefresh),
+
+  // Your documents — the knowledge base (phase 3 of three). These answer in EVERY
+  // profile: searching your own documents is the companion's job, and the tool
+  // behind it is LOW and read-only (owner decision 2, 2026-08-24).
+  //
+  // `addKnowledgeDocument` is DELIBERATELY PARAMETERLESS and `reindexKnowledgeDocument`
+  // takes only an id: the file is chosen in the OS picker the core opens, so
+  // nothing this window could edit decides which file is read. Re-reading opens
+  // the picker again on the same file, and the person confirms — the core never
+  // asks the shell for a file's contents by path.
+  //
+  // Both take the LONG timeout, for the two reasons `previewRoutineImport` does
+  // and one more: a modal picker waits on a person, and then up to two megabytes
+  // are embedded by a local model with no progress line. The default two minutes
+  // would time the window out on a document the core was still busy indexing —
+  // and the row would land anyway, so the page would be wrong rather than slow.
+  //
+  // A refusal (a document already added, a file the shell would not read, a
+  // different file picked on a re-read) is a resolved {ok:false} carrying the
+  // core's own plain sentence, never a reject. A CLOSED PICKER is `{ok:false,
+  // cancelled:true}` and is not a refusal at all — see `parseKnowledgeMutation`.
+  listKnowledgeDocuments: (): Promise<KnowledgeDocument[]> =>
+    call(Method.KnowledgeList).then(parseKnowledgeDocuments),
+  addKnowledgeDocument: (): Promise<KnowledgeMutationResult> =>
+    call(Method.KnowledgeAdd, {}, TURN_TIMEOUT_MS).then(parseKnowledgeMutation),
+  reindexKnowledgeDocument: (id: string): Promise<KnowledgeMutationResult> =>
+    call(Method.KnowledgeReindex, { id }, TURN_TIMEOUT_MS).then(parseKnowledgeMutation),
+  removeKnowledgeDocument: (id: string): Promise<KnowledgeMutationResult> =>
+    call(Method.KnowledgeRemove, { id }).then(parseKnowledgeMutation),
 
   // Messaging channels — the phone connections a person can save (phase 1 of
   // three). NOT ONE OF THESE REACHES A NETWORK: `addChannel` writes a row that is

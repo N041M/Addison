@@ -823,3 +823,23 @@ erDiagram
   `Store.apply_config_state` (the `routine_runs` shape): the FK would otherwise abort the
   restore at COMMIT, and `ON DELETE CASCADE` would have wiped the state of every widget
   that *did* survive.
+- **knowledge_documents / knowledge_chunks / knowledge_embeddings** *(knowledge
+  retrieval, phases 1–3; the tables 2026-08-24, the surface that writes them
+  2026-09-04)*: the documents a person attached, the passages they were cut into, and
+  one vector per passage per embedding model. Three tables rather than one because the
+  embedding model may change without re-reading the file. **`path` is UNIQUE and is
+  always a path somebody picked** — Addison never walks a folder looking for things to
+  index — and `sha256` is the digest of the bytes that were INDEXED, which is what makes
+  *"this file has changed on disk"* answerable against the shell's own digest call. That
+  question is asked live and its answer is never stored, so no column here says whether
+  a file is still as it was. `flagged_chunks` and `screened_kinds` are a COUNT and a
+  list of rule names, never the matched text: quoting an injection into a row would
+  reproduce the payload somewhere else. Deletes cascade, so removing a document takes
+  its chunks and vectors in one statement. **All three are excluded from snapshots**
+  (owner decision 4, 2026-08-24, on the `tool_grants` precedent): a restore that put
+  back a document somebody removed would undo a deletion they performed, through the
+  deliberately ungated one-action restore — so removal here is permanent, and Settings →
+  "Your documents" says so before the second press. The rows are written by
+  `agent_core/rpc/knowledge.py` (`knowledge.add`, `knowledge.reindex`,
+  `knowledge.remove`) and read by `search_knowledge`;
+  [`knowledge-retrieval-plan.md`](plans/knowledge-retrieval-plan.md) owns the design.

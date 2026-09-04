@@ -123,6 +123,20 @@ class ShellBridgeStubs:
     def pick_file(self) -> str:
         raise NotImplementedError
 
+    def pick_knowledge_document(self, suggested_path: str | None) -> dict:
+        # Knowledge phase 3. Raising like every other stub: a fake that quietly
+        # answered an empty document would let an add test believe a picker had been
+        # opened when the test never meant to say anything about pickers.
+        raise NotImplementedError
+
+    def digest_knowledge_documents(self, paths: list[str]) -> dict:
+        # Knowledge phase 3. Raising too, and the caller catches it: `knowledge.list`
+        # folds ANY failure here into "Addison can't tell" for the rows in that batch,
+        # so a suite-wide stub that raised is exactly the shape the list has to
+        # survive — and a test that means to say something about digests supplies its
+        # own fake.
+        raise NotImplementedError
+
     def write_workspace_file(self, path: str, content: str) -> dict:
         raise NotImplementedError
 
@@ -306,6 +320,7 @@ def build_server(
     ollama_client=None,
     seed_widgets: bool = False,
     store_factory=None,
+    embedder=None,
 ) -> IpcHarness:
     """Stand up a real JsonRpcServer on fake pipes and start its run loop.
 
@@ -327,6 +342,9 @@ def build_server(
       False (the harness pre-sets the 'widgets_seeded' flag so the rail starts empty),
       keeping the widget-mechanics tests isolated from the seeded defaults; the
       seeding tests pass True to exercise it.
+    - ``embedder``: the thing ``knowledge.add`` chunks and embeds through — anything
+      with a ``.model`` and a ``.prepare`` (knowledge phase 3). Left None everywhere
+      but the knowledge tests, where a fake keeps the whole suite off a real Ollama.
     - ``store_factory``: replaces the default file-backed factory. Exists for the
       G3 tests, whose whole premise is a factory that RAISES — a store that will
       not open is the situation the snapshot floor exists for, and it has to be
@@ -365,6 +383,7 @@ def build_server(
         connect_provider=connect_provider,
         provider_key_probe=provider_key_probe,
         ollama_client=ollama_client,
+        embedder_ref=(lambda: embedder) if embedder is not None else None,
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

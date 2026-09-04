@@ -62,6 +62,14 @@ answers without the tool or explains, without re-prompting in a loop.
 **"Show what Addison did"** and the step list mentions the calculation.
 No risk codes, tool ids, or jargon anywhere on the card.
 
+**And when a card carries a command, the command is shown whole.** In Developer, ask
+for something that runs a long command (§13's harness steps do). On the card the
+command sits in its own block under the sentence and **wraps onto as many lines as it
+needs**: no ellipsis, no scrollbar, and nothing that appears only on hover. Hover is
+not consent, and a command cut short is a different command from the one being
+approved. A card whose sentence merely contains the words "run:" — a routine's
+consequence line, say — must show no command block at all.
+
 ## 4. Web search
 
 **Do:** ask something that needs today's information (for example, "What's the weather
@@ -887,6 +895,86 @@ to use a tool server's tool: it will not, and it says so plainly.
 **And a removed server is not called.** Check a server, then remove it, then ask
 Addison to use one of its tools in the same session. It refuses; the address is
 looked up when a tool is used, not remembered from the check.
+
+---
+
+## 17. Your documents (Knowledge phases 1–3: add a document, ask about it, remove it)
+
+Settings → **"Your documents"**. Have two files to hand: a plain `.txt` or `.md` with
+something in it only that file says (an invented address, a made-up clause), and a
+picture. Ollama with an embedding model is what makes indexing work; the last check
+here deliberately turns it off, so do this section with it running and finish with it
+stopped.
+
+**Before believing anything on this screen, prove the build from inside the page.**
+This section is new, so "the section isn't there" is exactly what a stale webview
+cache looks like: `Array.from(document.scripts).map(s => s.src)` in the inspector must
+match the hash in `shell/dist/index.html`. `HANDOFF.md` owns the trap and the two
+cache directories to clear.
+
+**In BOTH profiles.** Unlike Tool servers, this section is present in Simple and in
+Developer, with the same rows and the same controls — the search behind it is
+read-only. Switch profiles both ways and check the list does not empty, hide itself,
+or lose Remove.
+
+**Read the standing line first.** It has to say two things, and neither may be
+missing: the searchable copy stays on this computer, **and** the parts that match a
+question are sent to the model that answers, like anything else you type in a chat.
+
+**Add one.** **"Add a document…"** opens the ordinary macOS file dialog. Pick the text
+file. While it works the panel says Addison is reading the document and building its
+index and the other controls are disabled; then a row appears with the file's name,
+its full path underneath in the machine-fact type, and **"Ready. N passages."** Close
+the picker with Cancel instead and **nothing at all** appears — no error, no empty
+row.
+
+**Four refusals, each one plain sentence and no row saved:**
+- **the picture** — copy it to `photo.txt` first, so it gets past the dialog's own
+  filter. Expect a sentence saying plain text and Markdown for now, and no row. (The
+  filter is the first refusal: an unrenamed `.png` cannot be chosen at all.)
+- **a file over 2 MB** (`head -c 3000000 /dev/urandom | base64 > big.txt`). Expect a
+  sentence that names the 2 MB limit and no row.
+- **anything inside `~/.addison`** — Addison's own data directory, refused by the
+  shell whatever the core asks for.
+- **the same file twice** — expect *"That document is already added. Use Update to
+  read it again."*
+
+**Then change the file behind Addison's back.** Edit it in another app and save. Quit
+Addison and start it again — the list is read when the engine becomes ready and after
+each action on the panel, never when Settings opens, so a file that changes mid-session
+is not noticed until one of those. The row now reads **"This file has changed since
+Addison read it."** and has an **Update** control. Press Update: **the file picker opens again**,
+already pointed at that file, and you confirm it. That is the design, not a bug —
+Addison never re-reads a document's contents without you choosing it. Confirm, and the
+row goes back to Ready with a passage count for the new text. Now press Update again
+and pick a **different** file: it must refuse in one sentence and leave the row exactly
+as it was.
+
+**A document Addison could not read is remembered, not lost.** Quit Ollama entirely and
+add a second document. Expect a row that stays in the list, saying in plain words that
+the part which reads documents locally isn't available and naming what to install,
+with **Try again** beside it. Start Ollama again, press Try again, confirm the file in
+the picker: the row becomes Ready. A row that vanished, or a raw error, is the failure
+here.
+
+**Ask about it in chat.** In Simple, ask a question whose answer is only in the
+document ("what's the notice period in my tenancy agreement?"). Expect an answer that
+uses the document's own detail; expand **"Show what Addison did"** and the step list
+names the search plainly. What the engine receives is passages headed `From "<the
+document>" (characters …)`, so an answer must never pass the document's words off as
+its own. If the document contains writing shaped like an instruction, the row said so
+when it was added ("N of them contain writing shaped like an instruction") and the
+passage carries that note too — and Addison must treat it as information, never follow
+it.
+
+**Remove takes two presses, and it says what it costs.** Press **Remove**: it becomes
+**"Really remove?"** and a sentence appears saying removal is permanent, that a restore
+point will not bring it back, and that the file on your computer is left alone. Press
+again: the row goes and the panel says *"Addison has forgotten <name>. The file itself
+is untouched."* Check the file is still on disk, and ask the same question again —
+Addison should no longer find it. Take a restore point before the removal and restore
+afterwards if you want to see the permanence for yourself: the document stays gone,
+which is the decision, not a fault.
 
 ---
 

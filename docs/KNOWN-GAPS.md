@@ -132,6 +132,21 @@ the block's look.
     and the failure worth avoiding is a wrong number rather than no number.
     Developer/Custom only, because `run_command` is the only tool it reads and
     that tool is dev-only.
+    **AND IT REACHED NO CARD UNTIL 2026-09-04.** The core computed the line, the
+    protocol carried it, and `PermissionCard.tsx` rendered it — three correct
+    layers — while `normalizePermission` in `shell/src/App.tsx`, the ONE function
+    that turns a `permission.requestGrant` frame into the props the card is given,
+    never copied `preview`. The field was dropped on the way in, so no card in the
+    running app has ever carried the sentence, and the routine-sharing taint line
+    (2026-08-15) rode the same field and was lost the same way. Nothing failed:
+    every frontend test rendered the component with a hand-built request, and the
+    2026-08-21 whole-app pass had no step for it because
+    [TESTING-CHECKLIST.md](TESTING-CHECKLIST.md) never mentioned the line. Found and
+    fixed while the card gained its `command` field (2026-09-04);
+    [`../KNOWN-BUGS.md`](../KNOWN-BUGS.md) carries it as a defect. The shape is worth
+    more than the bug: **a field three layers pass and a fourth silently drops looks
+    exactly like a feature nobody uses**, and the boundary that drops it is the one
+    place no test was pointed at.
   - **A copy-on-write clone for the file-only subset. STILL OPEN.** APFS `clonefile` is
     instant and free, so the command could run against a clone under the existing
     seatbelt with `network-outbound` denied, and the diff shown. Honest limits:
@@ -1120,10 +1135,12 @@ follows. None is scheduled and none blocks anything.
     that stops mid-sentence shows that by itself, and a second rail-and-label
     annotation would compete with the free-model chip on exactly the messages
     likeliest to carry both.
-- **Knowledge: retrieval over person-attached files. DECIDED, AND PHASE 1 BUILT
-  2026-08-24** ([knowledge-retrieval-plan.md](plans/knowledge-retrieval-plan.md) owns
-  the design, the four answered owner decisions and the two phases still to build;
-  what follows is why it was queued). **Its screening
+- **Knowledge: retrieval over person-attached files. DECIDED, AND ALL THREE PHASES
+  BUILT — 1 and 2 on 2026-08-24, 3 on 2026-09-04**
+  ([knowledge-retrieval-plan.md](plans/knowledge-retrieval-plan.md) owns the design,
+  the four answered owner decisions and what each phase shipped; what follows is why
+  it was queued, and what phase 3 leaves open is its own block at the end of this
+  file). **Its screening
   prerequisite was met** (screening shipped 2026-08-13,
   [untrusted-screening-plan.md](plans/untrusted-screening-plan.md)), **with one thing to
   settle when this is built**: retrieved passages are local file content, and
@@ -1148,7 +1165,11 @@ follows. None is scheduled and none blocks anything.
   checking the first hop. **The screening question above is ANSWERED: at index time,
   once per chunk, verdict stored** — which is also the only moment a person can be
   told a document contains instruction-shaped writing while they can still decline
-  to add it.
+  to add it. **The picker consent above is the surface phase 3 built**: "Your
+  documents" in Settings, in every profile, where a document is added, re-read and
+  removed — and the shell never hands the core a document's bytes without a native
+  picker in between, so a stored path is a way to ask whether the file changed and
+  never a standing licence to read it.
 - **Per-task model assignment: Developer-only, not v1 (owner, 2026-08-09).** The
   raw suggestion was "models casually on the sidebar"; rejected for Simple (model
   choice is a power-user surface, design-doc §7.3.3, and the companion keeps its
@@ -1309,3 +1330,52 @@ decisions and the numbered list of what is owed):**
   it is named here so it is a known bound rather than an assumption. Nothing on the
   Unix side is better in this respect — `process_group(0)` has the same shape of gap
   against a descendant that calls `setsid`, which is why `drain` survives one.
+
+**Opened by Knowledge phase 3 (built 2026-09-04;
+[knowledge-retrieval-plan.md](plans/knowledge-retrieval-plan.md) owns the subject, the
+four answered owner decisions and what each phase shipped):**
+
+- **Nothing has spoken to a real Ollama embedding endpoint.** Every test in all three
+  phases runs against `httpx.MockTransport`, so what is known is that the wiring
+  type-checks and answers a stub. Adding a document on a machine with Ollama running —
+  and what the panel says on a machine without it — is a manual pass, and it is owed.
+  Treat any claim about embedding behaviour as unverified until it is done. Same shape
+  of debt the messaging channels carry.
+- **Re-reading a document is another trip through the picker, by design.** Update
+  (the file changed on disk) and Try again (the index failed) both re-open the native
+  dialog on the file, and the person confirms it again. That is what keeps a stored
+  path from becoming a standing licence for the core to read it, and it is the cost of
+  having no path-based content read at all. The way to buy the convenience back is a
+  persistent shell-side consent ledger — a remembered per-document grant the shell
+  itself holds. It was considered and recorded as a later option, not built, because it
+  is a new trust surface and this feature does not need one.
+- **A file that changes while the app is running is not noticed until the list is read
+  again.** `onDisk` is computed when `knowledge.list` is answered, and the panel asks
+  for that list when the engine becomes ready and after every add, update or removal —
+  never when the Settings section is opened. So a document edited in another program
+  goes on reading "Ready" until one of those happens, and the honest fix is a re-read on
+  the section opening, which the hook already has the callable for
+  (`refreshDocuments`). Nothing is wrong on the screen; it is only older than it looks.
+- **A long local embedding run has no progress and no cancel.** The panel says
+  "Addison is reading the document and building its index. A big file can take a
+  minute." and then nothing until it finishes: the embedder reports no progress, so
+  there is none to show, and the run is not interruptible. The 2 MB ceiling
+  (`KNOWLEDGE_DOCUMENT_SIZE_BOUND`, refused in the shell) is what bounds that wait, and
+  it is the reason the bound is its own constant rather than the picker's.
+- **Plain text and Markdown only.** The shell's dialog filters to `txt`, `md`,
+  `markdown` and `text`, and bytes that are not UTF-8 are refused in one sentence. PDF
+  and Word are the plan's §7 limit, unchanged: extraction is lossy, and a table
+  flattened into prose retrieves as nonsense. A person who wants a PDF in has to
+  convert it themselves, and nothing in the app says so.
+- **A crash between the row and its index leaves a `pending` row.** The write is two
+  steps on the worker — remember the document, then store its passages — so a process
+  that dies in between leaves a row that says "Addison hasn't finished reading this."
+  and offers Try again. Nothing sweeps it, and nothing retries on its own; the row is
+  honest and the person clears it by re-reading or removing. It is the one status a
+  fresh install should never show.
+- **A batch of more than two hundred paths is sliced, and each slice is one shell
+  round trip.** The shell refuses a digest batch over `MAX_BATCH_PATHS` (200), so
+  `_knowledge_on_disk` asks in slices of that size (a test reads the Rust constant so
+  the two numbers cannot drift). A knowledge base that size therefore costs several
+  round trips per list, each on the worker; nothing here has seen one, and it is
+  recorded so the cost is not a surprise rather than because it is wrong.
