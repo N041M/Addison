@@ -50,9 +50,11 @@ card's `permission_detail` is the automation's NAME, not a command (`arm_automat
 puts the command in the arming preview, where reading it is the point), so an expired
 arming card drew "Nightly backup" in the mono block whose whole visual grammar means
 *this is the exact command that will run*. The change that removed one string-pun
-introduced another, in the same file, in the same hour. The correction belongs on the
-branch that introduced it, and the check that holds it is an expired arming card with
-no command block on it.
+introduced another, in the same file, in the same hour. The correction landed on that
+branch before it became PR #156: an arming card carries NO card-level `command` (the
+arming payload owns the only command there), the dead keyword card draws that command
+and still says which automation it was, and both halves are pinned on the real
+`arm_automation` round trip rather than on a stand-in.
 
 **A TEST CAN BE INVISIBLE TO ITS OWN MUTATION IN TWO WAYS, AND BOTH SHOWED UP HERE.**
 Neither was found by reading; both were found by mutating the thing the test names.
@@ -78,7 +80,75 @@ in the plan's §6 and both are the kind of thing that comes back:
   emitting a passage a tenth of the size asked for — and multiplying the chunk count,
   the embedding time and the vector rows for the whole document.
 
-<!-- REVIEW-ROUND: to be filled by the orchestrator -->
+**THE REVIEW ROUND — two read-only hunters over the merged tree, then one fix
+round, then a regression pass over the fixes.** Ranked by what it would have cost.
+
+- **A native file dialog was awaited inline on the core's stdout pump.** In the shell,
+  `dispatch_off_loop` claimed only `keychain.*`, `shell.runCommand` and the three
+  automation methods, so `shell.pickKnowledgeDocument` — exactly like `shell.pickFile`
+  and `shell.pickDirectory` before it, under a comment asserting that "a picker is
+  fast" — fell through to `filesystem::handle(...).await` inside `handle_line`, whose
+  caller is the reader loop. A dialog is not fast; it is a person deciding, and while
+  one stood open the shell read no further line of the core's output at all: every
+  Core→Frontend frame stalled behind it, and a Core→Shell request made from the worker
+  while the dialog was up (`knowledge.list`'s digest call) could not be answered, died
+  at the bridge's sixty-second ceiling, and parked the worker for a minute. The
+  core-side thread split this phase built so carefully bought nothing in production,
+  because the stall was one process over. The fix is a second dispatcher,
+  `dispatch_dialog_off_loop`, consulted right after the first: it claims exactly the
+  three dialog methods, spawns `filesystem::handle` on the async runtime, writes the
+  answer back through the same locked stdin path `spawn_request` uses, and captures the
+  core generation before the dialog opens so a picker answered after a respawn is
+  dropped rather than delivered to a stranger's request id. A separate function
+  because `dispatch_off_loop` is deliberately synchronous and `AppHandle`-free (the
+  clock test drives it) while a dialog needs the handle. `shell.saveNewFile` also
+  opens a dialog and deliberately stays on the pump — it is reached from a tool behind
+  a card, and widening the fix to it is a separate call, said so in the membership
+  test. The wiring is source-pinned in `handle_line`, because commenting the call out
+  left the whole suite green while every dialog went back to holding the app.
+- **Two size bounds, each right, never related.** The picker admits a document up to
+  2 MB; the review surface's digest answers "cannot tell" above 256 KB, a number its
+  own comment justifies from the write ledger (a file Addison overwrote was at most
+  that big). A document Addison never wrote is outside that reasoning, so for any
+  document between the two numbers the panel said "Ready" forever after an edit and
+  never offered Update. `shell.digestKnowledgeDocuments` now digests under the
+  document ceiling, `digest_workspace_path` takes its bound as a parameter, and a
+  compile-time assertion relates the two constants so they cannot drift apart twice.
+- **The cancel-versus-refusal test was a string match across two languages, and
+  nothing pinned it.** The core compared the shell's error text with one Python
+  constant; the Rust side held four separate copies of the sentence, and rewording
+  only the knowledge picker's copy left both suites green while a cancelled dialog
+  became an error line on the panel. One Rust constant at all four sites now, and a
+  Rust test that reads `shell_bridge.py` and asserts the exact sentence.
+- **A dialog waited on a process's budget, not a person's.** The picker call carried
+  the bridge's sixty-second default; `_KEYCHAIN_TIMEOUT` had already written down why
+  that is wrong for a modal dialog, and `workspace.pickDirectory` had already separated
+  a timeout from a cancel. The document picker got neither. It has its own ten-minute
+  budget now, and a timeout answers "Addison stopped waiting for the file picker, so
+  nothing was chosen and nothing changed."
+- **The builder's own three disagreements were right and are in.** A duplicate
+  document, and a re-read that picked a different file, were both refused only in the
+  commit job — after a full embedding run of a document that was never going to be
+  written; both are refused on the thread first now, with the authoritative check kept
+  where it was. And the shell refuses a digest batch over two hundred paths, so past
+  two hundred documents every row read "unknown"; the core slices the batch, and a test
+  reads the Rust constant so the two numbers stay one number.
+- **No frontend test tied a sentence to its row.** Every multi-row assertion was a
+  whole-document `getByText`, so rendering every row's status from the first document
+  left all thirty-seven tests green — on the one panel whose header rule is that a row
+  never claims more than the core said. The two-row cases assert `within(row)` now, and
+  a three-state render (ready, failed, gone) is what makes a cross-row leak visible.
+- **Smaller, and fixed:** a file Addison cannot find now wins over every other state
+  (Remove only, in any status, as the comment beside the rule had claimed all along);
+  a primed "Really remove?" is disarmed when any re-read starts and whenever the list
+  changes, so another row's Update can no longer leave a one-click permanent delete
+  armed; an embedder with no model name is refused before the picker opens rather than
+  writing vectors under a name the search can never read back.
+- **A method note that cost a reviewer an hour.** Mutation-test, run, restore inside
+  one second, and CPython accepts the stale `.pyc` — it validates bytecode against the
+  source's mtime in whole seconds — so the restored original ran the mutant's code and
+  a test failed for a defect the tree did not have. Purge `__pycache__` after every
+  restore and re-run the baseline before believing a red.
 
 **WHAT SHIPPED — Knowledge phase 3, "Your documents".** A Settings section in EVERY
 profile (the tool behind it is LOW and read-only, owner decision 2 of 2026-08-24, so
@@ -94,8 +164,10 @@ again" after a failed index — opens the SAME dialog pointed at the file, and t
 confirms; a different file is refused rather than absorbed, because `path` is unique
 and re-pointing a row would turn one document into another under a name they still
 recognise. What the core stores is the path, so it can ask
-`shell.digestWorkspaceFiles` later whether the file changed — a digest crosses that
-bridge, never content by path, which would have handed the middle-trust process a
+`shell.digestKnowledgeDocuments` later whether the file changed (its own method, with
+a bound that matches the document ceiling; see the review round above for why the
+review surface's digest could not be reused) — a digest crosses that bridge, never
+content by path, which would have handed the middle-trust process a
 read-any-file capability the review surface deliberately confined to trusted roots. A
 persistent shell-side consent ledger is the way to buy that convenience back; it is
 recorded as a later option, not as a gap. `onDisk` (same / changed / missing /

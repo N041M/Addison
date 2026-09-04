@@ -1373,13 +1373,9 @@ four answered owner decisions and what each phase shipped):**
   and offers Try again. Nothing sweeps it, and nothing retries on its own; the row is
   honest and the person clears it by re-reading or removing. It is the one status a
   fresh install should never show.
-- **Past two hundred documents, no row can say whether its file changed.** `onDisk`
-  is answered by ONE batched `shell.digestWorkspaceFiles` call over every row's path,
-  and the shell refuses a batch over `MAX_BATCH_PATHS` (200). The core reads that
-  refusal as "cannot tell" for every row rather than as an error, so the list still
-  loads and every row reads as unknown — Update disappears, and a changed file stops
-  announcing itself. The core does not slice the batch today; slicing it is the fix,
-  and the line to change is `_knowledge_on_disk` in
-  [`../agent_core/rpc/knowledge.py`](../agent_core/rpc/knowledge.py). A knowledge base
-  that size is not a shape anything here has seen, which is why it is recorded rather
-  than solved.
+- **A batch of more than two hundred paths is sliced, and each slice is one shell
+  round trip.** The shell refuses a digest batch over `MAX_BATCH_PATHS` (200), so
+  `_knowledge_on_disk` asks in slices of that size (a test reads the Rust constant so
+  the two numbers cannot drift). A knowledge base that size therefore costs several
+  round trips per list, each on the worker; nothing here has seen one, and it is
+  recorded so the cost is not a surprise rather than because it is wrong.

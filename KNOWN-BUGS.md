@@ -144,7 +144,7 @@ it once, so persistence is correct.
 ## Found later (not from the August pass)
 
 16. ~~**The delete preview and the routine-sharing taint line never reached a
-    card.**~~ **FOUND AND FIXED 2026-09-04 (PR pending).** `normalizePermission`
+    card.**~~ **FOUND AND FIXED 2026-09-04 (PR #156).** `normalizePermission`
     in `shell/src/App.tsx` — the one function that turns a
     `permission.requestGrant` frame into the props a permission card is rendered
     with — never copied `preview`, so the field was dropped at the wire boundary

@@ -63,7 +63,7 @@ in the block: `%% not-in-code: Name, why`.
 `ROADMAP.md` owns whether a plan is scheduled; this table says only where each one
 stands relative to the tree.
 
-> **These twelve documents live in [`plans/`](plans/), and `plans/` IS NOT IN THE
+> **These thirteen documents live in [`plans/`](plans/), and `plans/` IS NOT IN THE
 > REPOSITORY** (owner decision 2026-08-24). The rule is one line in `.gitignore`;
 > this is the reasoning and, more usefully, the cost. Nothing is deleted and nothing
 > is secret — every one of them is in the git history — but a fresh clone does not
@@ -77,7 +77,7 @@ stands relative to the tree.
 >   checked* — so a plan renamed without its referrers still fails, on the machine
 >   where that rename happens.
 > * The claims registry scans the markdown it can see, so on a clone without the
->   bundle those twelve documents are never scanned for a contradiction.
+>   bundle those thirteen documents are never scanned for a contradiction.
 > * **Eleven of the twenty-two rows in `tests/doc_claims.py` name a plan as their
 >   OWNER**, and a work order that says *"check the owner"* then names a file the
 >   reader does not have. That is the sharpest edge of this decision and it is not
