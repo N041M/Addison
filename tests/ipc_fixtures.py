@@ -312,10 +312,12 @@ def _activity_notification(server: JsonRpcServer) -> dict:
 
 # EXACTLY MAX_PERMISSION_DETAIL_CHARS characters (120), asserted below rather than
 # counted by hand. The cap is chosen so the whole command can be SHOWN, so the
-# fixture's job is to carry the longest thing that ever legitimately arrives and let
-# the frontend test prove all 120 characters land in the DOM. It is also shaped like
-# the sighting that made this a defect: a harmless-looking prefix followed by the
-# part a truncated card would hide.
+# fixture's job is to carry a full-length command the tool did NOT have to cut — one
+# it cut is a character longer, 120 plus the ellipsis it added, which
+# tests/test_permission_card_command.py pins — and to let the frontend test prove
+# all 120 characters land in the DOM. It is also shaped like the sighting that made
+# this a defect: a harmless-looking prefix followed by the part a truncated card
+# would hide.
 _CARD_FIXTURE_COMMAND = (
     "git status --short && rm -rf ~/Documents/Archive/2024 "
     '&& rm -rf ~/Documents/Archive/2025 && echo "the archive is tidied"'

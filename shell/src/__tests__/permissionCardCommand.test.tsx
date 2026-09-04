@@ -52,9 +52,13 @@ const MAX_PERMISSION_DETAIL_CHARS = 120;
 describe("pc-01 · the command renders WHOLE", () => {
   it("puts all 120 characters in the DOM as text", () => {
     const command = RUN_CARD.command!;
-    // The fixture is the longest command that ever legitimately arrives. If this
-    // ever stops being true the artifact was regenerated from a different call, and
-    // the test below stops testing truncation at all.
+    // The fixture carries a full-length command the tool did NOT have to cut —
+    // MAX_PERMISSION_DETAIL_CHARS exactly. Not quite the longest string that can
+    // arrive: one the tool cut is a character longer (120 plus the ellipsis it
+    // added), which the Python side pins. What this length is for is being long
+    // enough that a card which truncates would visibly truncate it, so if it ever
+    // stops holding, the artifact was regenerated from a different call and the
+    // assertions below stop testing truncation at all.
     expect(command).toHaveLength(MAX_PERMISSION_DETAIL_CHARS);
 
     const { container } = render(<PermissionCard request={RUN_CARD} onRespond={vi.fn()} />);
@@ -65,8 +69,7 @@ describe("pc-01 · the command renders WHOLE", () => {
     expect(container.textContent).toContain(command.slice(-40));
   });
 
-  it("carries no `truncate` anywhere on the card, and no title holding the command", () => {
-    const command = RUN_CARD.command!;
+  it("carries no `truncate` anywhere on the card, and no title at all", () => {
     const { container } = render(<PermissionCard request={RUN_CARD} onRespond={vi.fn()} />);
 
     // Nothing on this card clips text. Asserted over the whole card rather than the
@@ -79,13 +82,9 @@ describe("pc-01 · the command renders WHOLE", () => {
 
     // No tooltip stands in for the text. A `title` is not consent — it is not
     // reachable from a keyboard or a screen reader, and it is not the thing the
-    // reader is looking at when they press Allow. Checked over every element that
-    // has one, and there should be none at all on this card.
-    const titled = Array.from(container.querySelectorAll<HTMLElement>("[title]"));
-    expect(titled).toHaveLength(0);
-    for (const el of titled) {
-      expect(el.getAttribute("title")).not.toContain(command);
-    }
+    // reader is looking at when they press Allow. NONE at all on this card, which
+    // is stricter than "none holding the command" and is the state to hold.
+    expect(container.querySelectorAll("[title]")).toHaveLength(0);
   });
 
   it("wraps instead, and keeps a multi-line command's own line breaks", () => {
@@ -156,7 +155,12 @@ describe("pc-02 · prose that merely contains \"run: \" is never drawn as a comm
   });
 });
 
-describe("pc-03 · the expired card", () => {
+// The plan's ids stop above. Its `pc-03` is "a core reword silently disables the
+// chip", which has no case of its own any more: nothing on this side reads the
+// core's sentence at all, and pc-01's "renders the core's lead sentence and never
+// composes one of its own" is what holds it. What follows is the dead card, which is
+// the same field seen after Stop.
+describe("the expired card", () => {
   it("shows the command muted, whole, and with nothing to press", () => {
     render(<PermissionCard request={RUN_CARD} onRespond={vi.fn()} expired />);
     const block = document.querySelector("[data-consent-command]")!;
@@ -166,6 +170,77 @@ describe("pc-03 · the expired card", () => {
     expect(block.getAttribute("title")).toBeNull();
     // A dead card is the record of what was asked, not a thing that can be answered.
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("keeps the delete preview too, as prose below the command", () => {
+    // Same reason the command survives Stop: what was nearly approved is exactly
+    // the thing worth being able to read afterwards, and how much it would have
+    // taken is half of that. It had been dropped from this card alone.
+    const withPreview: PermissionRequest = {
+      ...RUN_CARD,
+      preview: "About to delete 1,240 files in 12 folders.",
+    };
+    const { container } = render(
+      <PermissionCard request={withPreview} onRespond={vi.fn()} expired />,
+    );
+    const block = container.querySelector("[data-consent-command]")!;
+    const previewNode = screen.getByText(withPreview.preview!);
+    // Prose, in the dead card's ink — never inside the block that means "this is
+    // the exact command", and never styled as one.
+    expect(previewNode.className).toContain("text-muted");
+    expect(previewNode.className).not.toContain("font-mono");
+    expect(
+      block.compareDocumentPosition(previewNode) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
+describe("the expired arming card", () => {
+  // THE REGRESSION THIS CARD IS THE WHOLE REASON FOR. `arm_automation`'s per-call
+  // detail is the automation's NAME, so while the core attached a card-level
+  // `command` to every detail-bearing card, a stopped arming card read "This time it
+  // wants to run: Tidy up downloads" — a name in the block whose visual grammar
+  // means "this is the exact command", which is the exact lie the field exists to
+  // prevent. The core now sends no card-level command on an arming card; this
+  // fixture carries one ANYWAY, because this side must read truthfully whatever
+  // arrives.
+  const AUTOMATION_NAME = "Tidy up downloads";
+  const ARMED_COMMAND = "/usr/bin/find /Users/mira/Downloads -mtime +30 -delete";
+  const EXPIRED_ARMING: PermissionRequest = {
+    toolId: "arm_automation",
+    label: "Addison would like to switch on an automation",
+    description: "This time it wants to run:",
+    riskTier: "high",
+    command: AUTOMATION_NAME,
+    arming: {
+      nonce: "ACD-EFG",
+      automationName: AUTOMATION_NAME,
+      scheduleSentence: "Every Monday at 7:30",
+      command: ARMED_COMMAND,
+      installPath: "~/Library/LaunchAgents/com.addison.auto.tidy-downloads.plist",
+      warnings: ["This will run on its own schedule even when Addison is closed."],
+      attemptsLeft: 3,
+    },
+  };
+
+  it("draws the command the OS would have run, never the automation's name", () => {
+    const { container } = render(
+      <PermissionCard request={EXPIRED_ARMING} onRespond={vi.fn()} expired />,
+    );
+    const blocks = container.querySelectorAll("[data-consent-command]");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].textContent).toBe(ARMED_COMMAND);
+    expect(blocks[0].className).toContain("text-muted");
+    // The name is nowhere on the dead card — not in the block, not anywhere.
+    expect(container.textContent).not.toContain(AUTOMATION_NAME);
+  });
+
+  it("is dead: no buttons and no code box", () => {
+    // The keyword card's live half is its code box, and a ceremony nothing can
+    // accept is worse than no ceremony at all.
+    render(<PermissionCard request={EXPIRED_ARMING} onRespond={vi.fn()} expired />);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 });
 

@@ -209,13 +209,23 @@ export function PermissionCard({ request, onRespond, expired }: Props) {
 /**
  * What a permission card becomes when its turn is stopped.
  *
- * It keeps the question — the label, the consequence sentence under it, and the
- * command if there was one — so a person who looks back can see what they turned
- * down by stopping; all of it goes MUTED, the app's standing idiom for a row that
- * is present but not available (the WAITING routines and automations in Settings
- * say their one plain sentence in exactly this ink). The command is still shown
- * WHOLE: what was nearly approved is exactly the thing worth being able to read
- * afterwards. Then a hairline rule, and the sentence.
+ * It keeps the question — the label, the consequence sentence under it, the
+ * command if there was one and the delete preview if there was one — so a person
+ * who looks back can see what they turned down by stopping; all of it goes MUTED,
+ * the app's standing idiom for a row that is present but not available (the WAITING
+ * routines and automations in Settings say their one plain sentence in exactly this
+ * ink). The command is still shown WHOLE, and the preview still sits below it as
+ * prose: what was nearly approved is exactly the thing worth being able to read
+ * afterwards, and how much it would have taken is half of that. Then a hairline
+ * rule, and the sentence.
+ *
+ * THE KEYWORD GATE'S DEAD CARD SHOWS `arming.command`. That card's per-call detail
+ * is the automation's NAME (`arm_automation.permission_detail`), so drawing a
+ * card-level command here would say "This time it wants to run: Tidy up downloads"
+ * — a name in the block whose visual grammar means "this is the exact command",
+ * which is the one thing this whole field exists to prevent. The core sends no
+ * card-level command on an arming card; this side asks `arming` FIRST anyway, so a
+ * card that arrived with both would still read truthfully.
  *
  * NO BUTTONS AT ALL rather than disabled ones. A disabled Allow is still an Allow
  * in the reading order, still the accent-filled thing the eye goes to, and still
@@ -225,6 +235,7 @@ export function PermissionCard({ request, onRespond, expired }: Props) {
  * not to.
  */
 function ExpiredCard({ request }: { request: PermissionRequest }) {
+  const command = request.arming ? request.arming.command : request.command;
   return (
     <div
       {...CONSENT_CONTAINER}
@@ -233,7 +244,10 @@ function ExpiredCard({ request }: { request: PermissionRequest }) {
     >
       <p className="m-0 text-[12px] font-medium leading-[1.45] text-muted">{request.label}</p>
       <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-muted">{request.description}</p>
-      {request.command && <CommandBlock command={request.command} muted />}
+      {command && <CommandBlock command={command} muted />}
+      {request.preview && (
+        <p className="m-0 mt-2 text-[12px] leading-[1.55] text-muted">{request.preview}</p>
+      )}
       <p className="m-0 mt-2.5 border-t border-line pt-2.5 text-[12px] leading-[1.55] text-ink-soft">
         {EXPIRED_MESSAGE}
       </p>

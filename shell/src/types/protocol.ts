@@ -465,6 +465,9 @@ export interface PermissionRequest {
    * this is what would run, verbatim. Omitted — never null, never empty — on the
    * other two card shapes: a tool that words its own consequence sentence (the
    * file tools name the file), and the standing description a coarse card shows.
+   * Absent on the keyword gate's card too: `arm_automation`'s detail is the
+   * automation's NAME, so the only command there is the one the OS would run,
+   * `arming.command` — which is what the expired card draws under the sentence.
    *
    * A FIELD, not a phrase inside `description`, and that is the fix of 2026-09-04.
    * This card used to recover the command by searching the sentence for `run: `

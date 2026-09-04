@@ -483,7 +483,7 @@ def _card_consequence(tool, detail: str | None) -> tuple[str, str | None]:
 
 
 def build_permission_card(
-    tool, detail: str | None = None, preview: str | None = None
+    tool, detail: str | None = None, preview: str | None = None, *, arming: bool = False
 ) -> dict:
     """THE permission card — the exact ``permission.requestGrant`` params.
 
@@ -502,7 +502,18 @@ def build_permission_card(
 
     ``preview`` (5.6) is the delete preview and rides in its own field for the
     neighbouring reason: it is prose ABOUT the command, so it must never be read as
-    part of it."""
+    part of it.
+
+    ``arming`` says this card is the KEYWORD GATE (step 8 phase 3), and it takes the
+    ``command`` field AWAY: an arming card never carries one. ``arm_automation``'s
+    per-call detail is the automation's NAME ("Tidy up downloads"), deliberately and
+    for its own good reasons, so a card-level command here would draw a name in the
+    block whose whole visual grammar means "this is the exact command" — the lie
+    ``call_permission_sentence`` exists to prevent, arriving by the other door. The
+    command an arming card is about is the one the OPERATING SYSTEM would run, and
+    it travels in the ``arming`` payload as ``arming.command``: shown whole in the
+    live card's preview, which is the ceremony's whole point, and under the lead
+    sentence on the expired one (``PermissionCard.tsx``)."""
     definition = tool.definition
     description, command = _card_consequence(tool, detail)
     card: dict = {
@@ -511,7 +522,7 @@ def build_permission_card(
         "description": description,
         "riskTier": definition.risk_tier.value,
     }
-    if command:
+    if command and not arming:
         card["command"] = command
     if preview:
         card["preview"] = preview
@@ -2148,7 +2159,10 @@ class JsonRpcServer(
         and is never composed into a sentence for the webview to take apart again.
 
         ``arming`` (step 8 phase 3) turns this into the KEYWORD CARD and is handled
-        by ``_ask_with_keyword`` below.
+        by ``_ask_with_keyword`` below. It is ALSO handed to the builder, because a
+        keyword card carries no card-level ``command``: ``arm_automation``'s detail
+        is the automation's name, and the command that card is about is the one the
+        OS would run, which rides in ``arming.command``.
 
         ``preview`` (5.6) is the delete preview: ONE extra plain line saying how much
         a delete would take, computed by looking and never by running anything
@@ -2166,7 +2180,7 @@ class JsonRpcServer(
         if self._stopped():
             return PermissionStatus.DENIED
         tool = self.tool_registry.get(tool_id)
-        card = build_permission_card(tool, detail, preview)
+        card = build_permission_card(tool, detail, preview, arming=arming is not None)
         if arming is not None:
             return self._ask_with_keyword(tool_id, card, arming)
         allow, _ = self._ask_once(tool_id, card)

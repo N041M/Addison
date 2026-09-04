@@ -88,8 +88,10 @@ class Method:
     #
     # `preview` is the delete preview (5.6): prose ABOUT the command, in its own
     # field so it is never read as part of it. `arming` is the keyword gate's
-    # payload (step 8 phase 3) and carries its own `command`, untouched by any of
-    # the above. Mirrored in shell/src/types/protocol.ts (`PermissionRequest`).
+    # payload (step 8 phase 3), and AN ARMING CARD CARRIES NO CARD-LEVEL `command`
+    # at all: `arm_automation`'s per-call detail is the automation's NAME, so the
+    # only command on that card is the one the OS would run, `arming.command`.
+    # Mirrored in shell/src/types/protocol.ts (`PermissionRequest`).
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     # {} -> {request: card | null}. THE RE-SYNC QUERY, and the reason it exists is
     # worth stating: `permission.requestGrant` is a NOTIFICATION, so a card that is
