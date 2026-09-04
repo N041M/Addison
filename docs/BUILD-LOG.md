@@ -12,6 +12,122 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-04: the documents you attach get a surface, and the permission card stops parsing its own sentence
+
+Two pieces of work, and they share a lesson. Knowledge phase 3
+([`knowledge-retrieval-plan.md`](plans/knowledge-retrieval-plan.md) owns the subject
+and the four owner decisions) finished the feature: until today nothing in the app
+could add a document, so `search_knowledge` shipped two phases ago answering "there
+are no documents to search yet" and pointing at a Settings section that did not
+exist. The other is H9 of
+[`test-hardening-plan.md`](plans/test-hardening-plan.md) — the permission card's
+command travels as a FIELD now, not as a phrase for the webview to take apart. **The
+H9 work is on its own branch (`claude/permission-card-command`) and this entry rides
+with the Knowledge pull request**, because two branches both adding a top entry to
+this file is a conflict for no reason.
+
+**A FIELD THREE CORRECT LAYERS CARRIED AND A FOURTH SILENTLY DROPPED.** The most
+expensive finding of the day came out of the H9 work sideways, rather than from it.
+`normalizePermission` in `shell/src/App.tsx` — the ONE function that turns a
+`permission.requestGrant` frame into the props a card is rendered with, for both the
+notification and the `permission.pending` re-sync — had never copied `preview`. So the
+delete preview built on 2026-08-13 (5.6), the line the core walks a directory tree to
+compute, **has never appeared on a card in the running app**, and neither has the
+routine-sharing taint line of 2026-08-15, which rides the same field. The core was
+right, `protocol.py` was right, `PermissionCard.tsx` was right, and every frontend
+test rendered the component with a hand-built request that of course contained the
+field. Nothing was red. The 2026-08-21 whole-app pass did not catch it either, because
+[`TESTING-CHECKLIST.md`](TESTING-CHECKLIST.md) has no step that says the words "About
+to delete". **The general shape: a value that crosses four layers is tested at three
+of them, and the fourth is a normaliser nobody thinks of as logic.** Both fields are
+copied now, and both are pinned by a fixture the core generates rather than by a
+hand-built object.
+
+**A FIX IS NEW CODE, and the day's instance is on the H9 branch's own review.**
+Sending `command` as a field meant rendering it wherever a card is drawn — including
+the EXPIRED card, the record of a question whose turn was stopped. But the arming
+card's `permission_detail` is the automation's NAME, not a command (`arm_automation`
+puts the command in the arming preview, where reading it is the point), so an expired
+arming card drew "Nightly backup" in the mono block whose whole visual grammar means
+*this is the exact command that will run*. The change that removed one string-pun
+introduced another, in the same file, in the same hour. The correction belongs on the
+branch that introduced it, and the check that holds it is an expired arming card with
+no command block on it.
+
+**A TEST CAN BE INVISIBLE TO ITS OWN MUTATION IN TWO WAYS, AND BOTH SHOWED UP HERE.**
+Neither was found by reading; both were found by mutating the thing the test names.
+
+- **"Newest first" passed when the ordering was reversed**, because the two rows the
+  test seeded were added in the same wall-clock second, so the tie-break decided the
+  order and the ORDER BY did nothing. It is rewritten at the store, with the timestamps
+  the test controls, and dies now when the sort is flipped.
+- **"With no shell, the list still answers"** was written against an EMPTY list — and
+  `_knowledge_on_disk` returns before it reaches the bridge when there is nothing to
+  ask about, so the test never exercised the missing-bridge path it was named for. It
+  seeds a row now.
+
+**CARRIED FROM PHASES 1 AND 2 (2026-08-24), which never got an entry here.** Both are
+in the plan's §6 and both are the kind of thing that comes back:
+
+- **The import fence's first walk collected only the module half of an `ImportFrom`**,
+  so `from agent_core import orchestrator` walked straight through the fence that
+  exists to keep `knowledge/index.py` provider-free. Its own mutation test is the only
+  reason it is not still passing.
+- **The chunker's boundary search has to ignore breaks in the first half of its
+  window.** A paragraph break just after the start otherwise ends the chunk there,
+  emitting a passage a tenth of the size asked for — and multiplying the chunk count,
+  the embedding time and the vector rows for the whole document.
+
+<!-- REVIEW-ROUND: to be filled by the orchestrator -->
+
+**WHAT SHIPPED — Knowledge phase 3, "Your documents".** A Settings section in EVERY
+profile (the tool behind it is LOW and read-only, owner decision 2 of 2026-08-24, so
+the surface that manages it is not a capability either; nothing in `rpc/knowledge.py`
+asks the mode, and a test holds that), backed by `knowledge.list`, `knowledge.add`,
+`knowledge.reindex` and `knowledge.remove`. **The one design rule shapes every method:
+the shell never reads a document's bytes for the core without a picker in between.**
+Adding reads through a new `shell.pickKnowledgeDocument` — a native dialog filtered to
+text and Markdown, refusing Addison's own data directory, a non-regular file, anything
+over 2 MB and bytes that are not UTF-8, and returning the text with the sha256 of
+exactly the bytes it read. Re-reading — "Update" when the file changed on disk, "Try
+again" after a failed index — opens the SAME dialog pointed at the file, and the person
+confirms; a different file is refused rather than absorbed, because `path` is unique
+and re-pointing a row would turn one document into another under a name they still
+recognise. What the core stores is the path, so it can ask
+`shell.digestWorkspaceFiles` later whether the file changed — a digest crosses that
+bridge, never content by path, which would have handed the middle-trust process a
+read-any-file capability the review surface deliberately confined to trusted roots. A
+persistent shell-side consent ledger is the way to buy that convenience back; it is
+recorded as a later option, not as a gap. `onDisk` (same / changed / missing /
+unknown) is computed while the list is answered and never stored, because the answer
+is only true at the moment it is asked. The picker is modal and a local embedding run
+is slow, so add and the re-read half of reindex run on a thread of their own and hand
+the WRITE back to the worker as a `knowledge_commit` job — the thread touches no
+store, and the row is re-read at commit time, since a dialog can stand open for
+minutes and a document can be removed while it does. A document that could not be
+embedded is REMEMBERED, as a failed row carrying the plain sentence and a Try again,
+rather than refused and forgotten. Removal is permanent — the three tables are outside
+restore points by owner decision 4, so no snapshot is taken and the panel says so
+before the second press. **Nothing in any of the three phases has spoken to a real
+Ollama embedding endpoint**; that manual pass is owed and
+[`KNOWN-GAPS.md`](KNOWN-GAPS.md) carries it beside the rest of what phase 3 leaves
+open.
+
+**WHAT SHIPPED — the permission card's command is a field (H9).**
+`permission.requestGrant` carries `command` exactly when the card is the per-call
+"wants to run" shape; `description` is the lead sentence alone. It is built in ONE
+place, `main.build_permission_card`, which the fixture rig calls too, so the payload
+the frontend renders in its tests is the payload the app sends. The card draws the
+command WHOLE — it wraps, keeps its own line breaks, and has neither `truncate` nor a
+`title` tooltip, because hover is not consent and a command cut at an ellipsis is a
+different command from the one being approved. The `run: ` re-parse is deleted:
+`PermissionCard.tsx` no longer reads the core's English, so the core can reword its
+sentence freely, and prose that happens to contain those two words can no longer be
+drawn in the block that means "this is the exact command". A stand-in tool pins that
+case in the fixtures — no shipping tool writes such a sentence today, which is exactly
+why the shape had no defence. **H14 (`open_link` IP vetting) stays open**, awaiting
+the owner.
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner

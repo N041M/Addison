@@ -352,6 +352,21 @@ CHANNEL_PAIRINGS_ARE_NEVER_RESTORED = True
 # cannot have, which no phase of the plan proposes.
 THE_REMOTE_VIEW_IS_A_SUBSET_OF_THE_SAFE_VIEW = True
 
+# Knowledge retrieval, all three phases (index and tool 2026-08-24, the Settings
+# surface 2026-09-04). A person can add a document in Settings under "Your
+# documents", ask about it in either profile, and remove it.
+#
+# Registered because this exact fact has ALREADY drifted, and quietly. The plans
+# table in `docs/README.md` was written *"PROPOSED 2026-08-24, nothing built"* on the
+# day phases 1 and 2 merged, and it still said so eleven days later — a status line
+# that was false within hours of being written, in the document that calls itself the
+# full map. Nothing failed, because "is this row still true?" was nobody's test. An
+# agent that believes it declines a capability the app has, or rebuilds it.
+#
+# Flip this only if the feature is genuinely withdrawn, and amend every line the run
+# then names in the same commit.
+KNOWLEDGE_IS_BUILT = True
+
 
 # ---------------------------------------------------------------------------
 # Row types
@@ -1664,6 +1679,61 @@ CLAIMS: tuple[Claim, ...] = (
                 "The review surface is no longer part of Phase 3 — this line still puts "
                 "it there. Amend it, or link to docs/plans/phase-3-review-surface-plan.md, "
                 "which owns what the phase contains."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    # -- knowledge: the documents you attach, and the surface that adds them --
+    Claim(
+        id="knowledge-is-built",
+        owner="docs/plans/knowledge-retrieval-plan.md",
+        holds=KNOWLEDGE_IS_BUILT,
+        true_state=(
+            "Knowledge retrieval is BUILT, all three phases — the index and the "
+            "`search_knowledge` tool on 2026-08-24, the Settings surface \"Your "
+            "documents\" on 2026-09-04. A person can add a document, ask about it in "
+            "either profile, and remove it."
+        ),
+        false_state=(
+            "Nothing in the tree indexes or searches an attached document, and there is "
+            "no surface that could add one."
+        ),
+        # Written from the four sentences that were ACTUALLY in the tree while this
+        # was partly built, wraps included — never from an idea of how somebody
+        # might phrase it. Each is a STATUS claim rather than a recount: "phase 1
+        # built" is followed by a date or a bold close, so an honest sentence like
+        # "Knowledge phase 1 built the three tables" (a verb, followed by its object)
+        # walks past. The one exception is the shape the pre-build notes used,
+        # "nothing can add a document", which is the sentence a stale surface claim
+        # would most likely be written as next.
+        while_true=Wrong(
+            pattern=(
+                r"nothing built[^\n]{0,60}retrieval over documents"
+                r"|knowledge[^\n]{0,90}\bphases? 1(?: and 2)? built\b"
+                r"\s*(?:\d{4}-\d{2}-\d{2}|\*\*|,)"
+                r"|owner decisions and the two phases still to build"
+                r"|phase 3 \(the settings surface\)[^\n]{0,40}\bnot built\b"
+                r"|nothing[^\n]{0,40}\bcan add a document\b"
+            ),
+            fix=(
+                "All three phases are built: the index and search on 2026-08-24, the "
+                "Settings surface \"Your documents\" on 2026-09-04. Say that instead, and "
+                "link to docs/plans/knowledge-retrieval-plan.md, which owns the phases "
+                "(ROADMAP.md owns status). If the FACT changed, flip KNOWLEDGE_IS_BUILT "
+                "in tests/doc_claims.py in the SAME commit."
+            ),
+        ),
+        while_false=Wrong(
+            pattern=(
+                r"knowledge\.(?:add|reindex|remove)\b"
+                r"|shell\.pickKnowledgeDocument"
+                r"|\bsettings\b[^\n]{0,80}\byour documents\b"
+                r"|\byour documents\b[^\n]{0,80}\bsettings\b"
+            ),
+            fix=(
+                "There is no knowledge surface in this tree — this line offers a method "
+                "or a Settings section that does not exist. Remove the claim, or flip "
+                "KNOWLEDGE_IS_BUILT in tests/doc_claims.py if it shipped again."
             ),
         ),
         exempt=FROZEN,

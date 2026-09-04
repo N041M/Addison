@@ -141,6 +141,24 @@ it once, so persistence is correct.
     red-railed observation.
     Frontend mermaid renderer / theme wiring · artifact §04
 
+## Found later (not from the August pass)
+
+16. ~~**The delete preview and the routine-sharing taint line never reached a
+    card.**~~ **FOUND AND FIXED 2026-09-04 (PR pending).** `normalizePermission`
+    in `shell/src/App.tsx` — the one function that turns a
+    `permission.requestGrant` frame into the props a permission card is rendered
+    with — never copied `preview`, so the field was dropped at the wire boundary
+    and no card in the running app has ever carried it. That silently voided two
+    shipped features: the delete preview of 2026-08-13 ("About to delete 1,240
+    files in 12 folders."), which the core walks a directory tree to compute, and
+    the routine-sharing taint line of 2026-08-15, which rides the same field.
+    Core, protocol and `PermissionCard.tsx` were all correct, every frontend test
+    rendered the component with a hand-built request that contained the field, and
+    no manual pass had a step for it — so nothing was red for three weeks. Found
+    beside the H9 work that gave the card its `command` field; both fields are
+    copied now and pinned by a fixture the core generates.
+    Frontend permission normaliser · `docs/KNOWN-GAPS.md` delete-preview entry
+
 ## Open questions (need a decision or one more observation, not yet a defect)
 
 - **Cost-first vs. explicit model pick — evidence and an owner directive,
