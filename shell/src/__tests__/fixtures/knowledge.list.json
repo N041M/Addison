@@ -1,0 +1,30 @@
+{
+  "documents": [
+    {
+      "id": "doc-fixture-2",
+      "displayName": "Notes.txt",
+      "path": "/Users/mira/Notes.txt",
+      "status": "failed",
+      "detail": "Addison couldn't do that, because the part that reads documents locally isn't available. Install Ollama and the 'nomic-embed-text' model, then try again.",
+      "chunkCount": 0,
+      "flaggedChunks": 0,
+      "byteSize": 40,
+      "addedAt": 4102444900,
+      "indexedAt": null,
+      "onDisk": "unknown"
+    },
+    {
+      "id": "doc-fixture-1",
+      "displayName": "Tenancy agreement.md",
+      "path": "/Users/mira/Documents/Tenancy agreement.md",
+      "status": "indexed",
+      "detail": null,
+      "chunkCount": 3,
+      "flaggedChunks": 1,
+      "byteSize": 1200,
+      "addedAt": 4102444800,
+      "indexedAt": 4102444860,
+      "onDisk": "unknown"
+    }
+  ]
+}

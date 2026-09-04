@@ -30,6 +30,7 @@ from pathlib import Path
 
 import httpx
 
+from agent_core.knowledge.index import NO_LOCAL_MODEL
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel, EffortLevel
@@ -340,6 +341,7 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "workspace.readEditDiff": _workspace_read_edit_diff_fixture(server),
         "workspace.revertFile": _workspace_revert_file_fixture(server),
         "mcp.list": _mcp_list_fixture(server),
+        "knowledge.list": _knowledge_list_fixture(server),
         "channel.list": _channel_list_fixture(server),
         "automation.list": _automation_list_fixture(server),
         # The same method in the OTHER profile. Not a method name — the only fixture
@@ -749,6 +751,95 @@ def _mcp_list_fixture(server: JsonRpcServer) -> dict:
         for server_id, _name, _url in rows:
             server._mcp_catalog.forget(server.tool_registry, server_id)
             server.store.delete_mcp_server(server_id)
+
+
+def _knowledge_list_fixture(server: JsonRpcServer) -> dict:
+    """A ``knowledge.list`` payload with rows in it (knowledge phase 3).
+
+    TWO ROWS, one per shape the panel renders differently, because a fixture of only
+    happy rows lets a parser drop the fields that decide what a person is shown. The
+    indexed row carries a passage count AND a flagged count — the sentence beside it
+    says "N passages" and appends a clause when screening flagged some of them, so a
+    fixture where `flaggedChunks` is always 0 would pin the parser against the one
+    case that never appears. The failed row carries `detail`, the plain sentence the
+    panel prints VERBATIM as its whole status line, and a null `indexedAt`: a payload
+    that lost either would leave somebody looking at a row that says nothing.
+
+    Written through the store and read back through the REAL handler, so the camelCase
+    renames (`display_name` -> `displayName`, `chunk_count` -> `chunkCount`) are pinned
+    rather than assumed, and so is the ABSENCE of `sha256` — the digest answers exactly
+    one question, this side answers it, and it never crosses to the webview.
+
+    `onDisk` is "unknown" on both rows because this server has no shell bridge, and
+    that is the honest word for "nobody looked" rather than a fixture convenience: the
+    other three verdicts need a real file on a real disk, which would put a
+    machine-specific path in a committed file. They are pinned in pytest instead
+    (`tests/test_knowledge_surface.py`), against a fake shell.
+
+    The paths and the digests are fixed literals, never real files, so the emitted
+    JSON is byte-stable and names nobody's home folder. Everything is torn down
+    afterwards, so the fixtures after this one are unaffected."""
+    chunks = [
+        {
+            "id": f"chunk-fixture-{i}",
+            "ordinal": i,
+            "text": text,
+            "char_start": i * 100,
+            "char_end": i * 100 + len(text),
+            "flagged": flagged,
+            "screened_kinds": "instruction_override" if flagged else None,
+            "vector": b"\x00\x00\x80?\x00\x00\x00\x00",
+        }
+        for i, (text, flagged) in enumerate(
+            [
+                ("The deposit shall be returned within ten working days.", 0),
+                ("Notice must be given in writing one calendar month before the end.", 0),
+                # Screening flagged this one at index time, so the row's flaggedChunks
+                # is 1 and the panel appends its clause. The TEXT here is ordinary —
+                # what the count describes is pinned in pytest, where an injection
+                # string can live without being copied into a file the frontend suite
+                # reads on every run.
+                ("The tenant shall keep the property in good repair.", 1),
+            ]
+        )
+    ]
+    server.store.add_knowledge_document(
+        doc_id="doc-fixture-1",
+        path="/Users/mira/Documents/Tenancy agreement.md",
+        display_name="Tenancy agreement.md",
+        sha256="a" * 64,
+        byte_size=1200,
+        added_at=_T0,
+    )
+    server.store.index_document(
+        doc_id="doc-fixture-1",
+        sha256="a" * 64,
+        byte_size=1200,
+        rows=chunks,
+        model="nomic-embed-text",
+        dim=2,
+        indexed_at=_T0 + 60,
+    )
+    server.store.add_knowledge_document(
+        doc_id="doc-fixture-2",
+        path="/Users/mira/Notes.txt",
+        display_name="Notes.txt",
+        sha256="b" * 64,
+        byte_size=40,
+        added_at=_T0 + 100,
+    )
+    server.store.fail_knowledge_document(
+        doc_id="doc-fixture-2",
+        # The sentence owner decision 3 settled, spelled by the module that owns it
+        # rather than copied — a second spelling here would be a fixture that pins the
+        # frontend against words the core no longer says.
+        detail=NO_LOCAL_MODEL.format(model="nomic-embed-text"),
+    )
+    try:
+        return server._knowledge_list()
+    finally:
+        for doc_id in ("doc-fixture-1", "doc-fixture-2"):
+            server.store.remove_knowledge_document(doc_id)
 
 
 def _channel_list_fixture(server: JsonRpcServer) -> dict:
