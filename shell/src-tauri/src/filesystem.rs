@@ -227,7 +227,7 @@ const MAX_DIR_ENTRIES: usize = 500;
 const NOT_TEXT_TO_READ: &str = "That file isn't a text file, so Addison can't read it here.";
 
 /// How many files ONE batch question may name (`shell.canRestoreWorkspaceFiles`,
-/// `shell.digestWorkspaceFiles`).
+/// `shell.digestWorkspaceFiles`, `shell.digestKnowledgeDocuments`).
 ///
 /// CAPPED HERE, in the shell, for `MAX_DIR_ENTRIES`'s reason and `UNDO_SIZE_BOUND`'s:
 /// this is where the bytes are, and the core's list is an INPUT to this boundary and
@@ -244,8 +244,8 @@ const NOT_TEXT_TO_READ: &str = "That file isn't a text file, so Addison can't re
 /// turn a working screen into a refused one for no reason a person could see.
 const MAX_BATCH_PATHS: usize = 200;
 
-/// Worded once because both batch methods raise it, and derived from the constant so
-/// the number in the sentence cannot drift from the number in the check.
+/// Worded once because all three batch methods raise it, and derived from the
+/// constant so the number in the sentence cannot drift from the number in the check.
 fn refuse_oversize_batch(paths: &[Value]) -> Result<(), RpcError> {
     // A REFUSAL, not a truncation of the list, and this is the one place in this file
     // where that decision needs arguing rather than restating. Both callers read a MAP
@@ -259,13 +259,16 @@ fn refuse_oversize_batch(paths: &[Value]) -> Result<(), RpcError> {
     // steered payload — and a total failure is a better one than a plausible-looking
     // partial answer.
     //
-    // SAID PLAINLY: the core folds a refusal from either of these into an empty map
-    // (`workspace._restorable_map` / `_digest_map` catch and return `{}`), so this does
-    // not reach a person as a sentence either way. What it buys is not a better error
-    // message, it is the boundary holding at all — and it costs nothing today, because
-    // the core's own list is capped at the same 200 (`file_revert._MAX_EDITS`, rows,
-    // which group to at most that many paths). This refusal is unreachable from the
-    // shipped caller by construction, which is exactly the condition under which a
+    // SAID PLAINLY: the core folds a refusal from the two review-surface methods into
+    // an empty map (`workspace._restorable_map` / `_digest_map` catch and return `{}`),
+    // and the knowledge caller (`rpc/knowledge.py::_knowledge_on_disk`) skips the one
+    // slice that was refused and keeps the rest, so this does not reach a person as a
+    // sentence either way. What it buys is not a better error message, it is the
+    // boundary holding at all — and it costs nothing today, because every shipped
+    // caller is capped at the same 200 on its own side (`file_revert._MAX_EDITS` rows,
+    // which group to at most that many paths; `rpc/knowledge.py::_MAX_DIGEST_BATCH`,
+    // which a test reads back from this file). This refusal is unreachable from the
+    // shipped callers by construction, which is exactly the condition under which a
     // floor is cheap to keep.
     if paths.len() > MAX_BATCH_PATHS {
         return Err(RpcError::app(format!(
@@ -3889,6 +3892,34 @@ mod tests {
         assert_eq!(entry.get("missing").and_then(Value::as_bool), Some(false));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_review_surface_keeps_its_own_smaller_digest_ceiling() {
+        // `digest_workspace_path` took its bound as a parameter so the knowledge
+        // digest could pass a bigger one — which also meant nothing pinned WHICH
+        // bound `shell.digestWorkspaceFiles` passes any more: swapping in the
+        // knowledge bound at that call site left every test green. This drives the
+        // review surface's own entry point with a file between the two numbers and
+        // asks for the honest "can't tell", which is what the write ledger's reasoning
+        // (`DIGEST_SIZE_BOUND`'s comment) says a file that size must get there.
+        //
+        // Mutation: pass `KNOWLEDGE_DIGEST_SIZE_BOUND` in `digest_workspace_files`
+        // and this fails — the file is hashed.
+        let path = temp_path();
+        std::fs::write(&path, "a".repeat(DIGEST_SIZE_BOUND as usize + 1))
+            .expect("seed one byte over the review surface's ceiling");
+
+        let params = json!({ "paths": [path.to_string_lossy()] });
+        let answer = digest_workspace_files(&params).unwrap();
+        let entry = answer
+            .get("digests")
+            .and_then(Value::as_object)
+            .and_then(|map| map.get(&path.to_string_lossy().to_string()))
+            .expect("an answer for the path it was asked about")
+            .clone();
+        assert!(entry.get("sha256").map(Value::is_null).unwrap_or(false));
+        assert_eq!(entry.get("missing"), Some(&Value::Bool(false)));
     }
 
     #[test]

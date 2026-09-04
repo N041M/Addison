@@ -218,7 +218,10 @@ const LIST_ARMED: &str = "shell.listArmed";
 ///
 /// Responses may complete out of order. That is fine — JSON-RPC ids correlate them
 /// core-side. Overlapping OS keychain access is serialized inside keychain.rs, so
-/// two requests can never raise two dialogs at once.
+/// two requests can never raise two keychain dialogs at once. (The native file
+/// dialogs, which `dispatch_dialog_off_loop` spawns, are not serialized here: every
+/// one of them is started by a person's click on an app-modal window, so a second
+/// cannot be started while the first is up.)
 fn dispatch_off_loop(stdin_state: &CoreStdin, frame: &Value) -> bool {
     let Some(method) = frame.get("method").and_then(Value::as_str) else {
         return false;
@@ -280,12 +283,16 @@ fn dispatch_off_loop(stdin_state: &CoreStdin, frame: &Value) -> bool {
 const PICK_FILE: &str = "shell.pickFile";
 const PICK_DIRECTORY: &str = "shell.pickDirectory";
 const PICK_KNOWLEDGE_DOCUMENT: &str = "shell.pickKnowledgeDocument";
+const SAVE_NEW_FILE: &str = "shell.saveNewFile";
 
 /// Whether a method opens one of those dialogs. Split out from the dispatcher below
 /// so the MEMBERSHIP is testable without an `AppHandle`: nothing in a unit test can
 /// build one, and the set is the half of this decision that gets edited.
 fn is_native_dialog(method: &str) -> bool {
-    matches!(method, PICK_FILE | PICK_DIRECTORY | PICK_KNOWLEDGE_DOCUMENT)
+    matches!(
+        method,
+        PICK_FILE | PICK_DIRECTORY | PICK_KNOWLEDGE_DOCUMENT | SAVE_NEW_FILE
+    )
 }
 
 /// The SECOND dispatcher off the pump, for the frames that must not be awaited on it
@@ -330,7 +337,18 @@ fn dispatch_dialog_off_loop(app: &AppHandle, stdin_state: &CoreStdin, frame: &Va
         // front of a picker for longer than a core takes to die and respawn, and the
         // new core's ids start again at `core-req-1`.
         let generation = stdin_state.0.lock().await.generation;
-        let outcome = filesystem::handle(&app, &method, &params).await;
+        // The handler runs as a task of its own so that a panic inside it (a poisoned
+        // `FileState` lock, a state that was never managed) is an `Err` here rather
+        // than a task that dies with the frame unanswered — `spawn_request`'s
+        // `failure` arm, for the same reason it has one: the core is waiting on this
+        // id, and the document picker waits ten minutes before giving up.
+        let handled = tauri::async_runtime::spawn(async move {
+            filesystem::handle(&app, &method, &params).await
+        })
+        .await;
+        let outcome = handled.unwrap_or_else(|_| {
+            Err(ipc::RpcError::app("Addison couldn't open a system dialog just now."))
+        });
 
         let mut channel = stdin_state.0.lock().await;
         if channel.generation != generation {
@@ -659,16 +677,22 @@ mod tests {
         // moving them would cost the ordering the core relies on for nothing.
         assert!(!is_native_dialog("shell.writeWorkspaceFile"));
         assert!(!is_native_dialog("shell.readClipboard"));
-        // `shell.saveNewFile` opens a dialog too and is deliberately NOT here: it is
-        // reached from a tool, behind a permission card, and the turn that asked is
-        // already waiting on it — a separate call from this one, made visible rather
-        // than implied. If it moves, this line is the place to say so.
-        assert!(!is_native_dialog("shell.saveNewFile"));
+        // `shell.saveNewFile` opens a dialog too — the Save panel behind the
+        // `save_file` tool and routine export — and it was left on the pump at first
+        // because "the turn that asked is already waiting on it". That covers the
+        // asking turn and nothing else: every OTHER frame in the app still stalled
+        // behind the Save panel. Same class, same route.
+        assert!(is_native_dialog("shell.saveNewFile"));
 
         // ...and the routes do not overlap: the sync dispatcher must not also claim a
         // dialog, or it would run an async handler's work on a blocking task.
         let channel = CoreStdin(Arc::new(Mutex::new(CoreChannel { stdin: None, generation: 0 })));
-        for method in ["shell.pickFile", "shell.pickDirectory", "shell.pickKnowledgeDocument"] {
+        for method in [
+            "shell.pickFile",
+            "shell.pickDirectory",
+            "shell.pickKnowledgeDocument",
+            "shell.saveNewFile",
+        ] {
             assert!(
                 !dispatch_off_loop(&channel, &json!({"jsonrpc": "2.0", "id": 1, "method": method})),
                 "{method} belongs to the dialog route, not the blocking one"

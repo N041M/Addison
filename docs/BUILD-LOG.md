@@ -101,10 +101,11 @@ round, then a regression pass over the fixes.** Ranked by what it would have cos
   core generation before the dialog opens so a picker answered after a respawn is
   dropped rather than delivered to a stranger's request id. A separate function
   because `dispatch_off_loop` is deliberately synchronous and `AppHandle`-free (the
-  clock test drives it) while a dialog needs the handle. `shell.saveNewFile` also
-  opens a dialog and deliberately stays on the pump — it is reached from a tool behind
-  a card, and widening the fix to it is a separate call, said so in the membership
-  test. The wiring is source-pinned in `handle_line`, because commenting the call out
+  clock test drives it) while a dialog needs the handle. `shell.saveNewFile` — the Save panel behind the `save_file` tool and routine
+  export — went through the same door once the regression pass pointed out that "the
+  turn that asked is already waiting on it" covered the asking turn and none of the
+  other frames in the app. Four native dialogs are off the pump; the membership test
+  names all four. The wiring is source-pinned in `handle_line`, because commenting the call out
   left the whole suite green while every dialog went back to holding the app.
 - **Two size bounds, each right, never related.** The picker admits a document up to
   2 MB; the review surface's digest answers "cannot tell" above 256 KB, a number its
@@ -136,8 +137,9 @@ round, then a regression pass over the fixes.** Ranked by what it would have cos
 - **No frontend test tied a sentence to its row.** Every multi-row assertion was a
   whole-document `getByText`, so rendering every row's status from the first document
   left all thirty-seven tests green — on the one panel whose header rule is that a row
-  never claims more than the core said. The two-row cases assert `within(row)` now, and
-  a three-state render (ready, failed, gone) is what makes a cross-row leak visible.
+  never claims more than the core said. One test now walks a three-state render (ready, failed,
+  gone) asserting `within(row)` for every row, which is what makes a cross-row leak
+  visible; the other multi-row cases reach their rows through per-document controls.
 - **Smaller, and fixed:** a file Addison cannot find now wins over every other state
   (Remove only, in any status, as the comment beside the rule had claimed all along);
   a primed "Really remove?" is disarmed when any re-read starts and whenever the list
