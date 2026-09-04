@@ -309,11 +309,23 @@ describe("the documents panel", () => {
   it("admits when a document contains writing shaped like an instruction", () => {
     // The screening verdict, stored at index time, told to the person on the page
     // where they could still remove the document.
+    renderPanel(stateWith({ documents: [doc({ flaggedChunks: 2 })] }));
+    expect(
+      screen.getByText(
+        "Ready. 3 passages. 2 of them contain writing shaped like an instruction; " +
+          "Addison treats those as information.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says it grammatically when exactly one passage is flagged", () => {
+    // "1 of them contain" is the sentence a template produces; a person reads a
+    // sentence. Mutation: collapse the singular branch into the plural one.
     renderPanel(stateWith({ documents: [doc({ flaggedChunks: 1 })] }));
     expect(
       screen.getByText(
-        "Ready. 3 passages. 1 of them contain writing shaped like an instruction; " +
-          "Addison treats those as information.",
+        "Ready. 3 passages. 1 of them contains writing shaped like an instruction; " +
+          "Addison treats it as information.",
       ),
     ).toBeTruthy();
   });

@@ -83,7 +83,16 @@ export function knowledgeStatusLine(doc: KnowledgeDocument): string {
   // Said only when there is something to say. The screening layer marks writing
   // shaped like an instruction, and a person is told the count on the page where
   // they could still remove the document (untrusted screening, 2026-08-13).
-  if (doc.flaggedChunks > 0) {
+  // Two spellings so the sentence is grammatical at one: "1 of them contains …
+  // treats it" and "3 of them contain … treats those".
+  if (doc.flaggedChunks === 1) {
+    return (
+      ready +
+      " 1 of them contains writing shaped like an instruction; " +
+      "Addison treats it as information."
+    );
+  }
+  if (doc.flaggedChunks > 1) {
     return (
       ready +
       ` ${doc.flaggedChunks} of them contain writing shaped like an instruction; ` +
