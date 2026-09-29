@@ -45,7 +45,6 @@ from typing import Any
 import httpx
 
 from agent_core.channels.adapter import (
-    CHANNEL_IN_USE,
     MAX_INBOUND_CHARS,
     MAX_LABEL_CHARS,
     SEND_REFUSED,
@@ -120,8 +119,18 @@ _START_PAYLOAD = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 #: The message Telegram sends when a person taps Start, whether they opened the bot
 #: by name or through a start link. ``/start`` alone, ``/start <payload>``, and the
-#: group form ``/start@<botname> <payload>``. Anything else is an ordinary message.
-_START_COMMAND = re.compile(r"/start(?:@[A-Za-z0-9_]+)?(?:\s+(?P<payload>.*))?", re.DOTALL)
+#: group form ``/start@<botname> <payload>``, all on one line. Anything else is an
+#: ordinary message, including a message of several lines that begins with
+#: ``/start``. A paired person's ordinary message must reach the model, and a start
+#: link never carries a line break, so the pattern allows spaces and tabs before the
+#: payload and nothing that crosses a line.
+#:
+#: The bot name after ``@`` is not checked against this bot. That is harmless. For
+#: a sender who is not paired, the payload is offered exactly as a typed message
+#: is, so a start addressed to another bot can do nothing a typed code could not.
+#: For a paired sender, the only effect is the paired sentence in place of a model
+#: turn.
+_START_COMMAND = re.compile(r"/start(?:@[A-Za-z0-9_]+)?(?:[ \t]+(?P<payload>.*))?")
 
 
 class TelegramAdapter:
@@ -288,11 +297,17 @@ class TelegramAdapter:
         refused, such as a chat that blocked the bot or a message Telegram would not
         take. A 5xx, a timeout and a transport error all mean "not right now".
 
-        409 is its own answer. Telegram sends it to ``getUpdates`` when a webhook is
-        set on the bot or when another program is polling the same token, and it
-        will keep sending it until a person changes something outside Addison. It
-        is raised as :class:`ChannelInUse` so the poll loop can stop and say so
-        instead of backing off forever while "Check now" still succeeds."""
+        A 409 raises :class:`ChannelInUse`. Telegram sends it to ``getUpdates``
+        when a webhook is set on the bot or when another program is polling the same
+        token, and then it keeps coming until a person changes something outside
+        Addison. Telegram also sends it once to the older of two open polls, which
+        happens to Addison's own loop when a person presses Stop and then Start, and
+        that one passes. The poll loop tells them apart by asking whether it is still
+        the current loop. A current loop stops on the conflict, and a replaced loop
+        returns without recording anything. A 409 is therefore never retried as an
+        outage. "Check now" (``getMe``) still succeeds while the conflict lasts,
+        which is why the state says what is wrong instead of saying Telegram is not
+        answering."""
         url = f"{_API_ROOT}/bot{token}/{method}"
         client = self._client
         try:
@@ -312,7 +327,7 @@ class TelegramAdapter:
             # this is exactly the right response to it.
             raise ChannelUnavailable(TRANSPORT_UNREACHABLE)
         if status == 409:
-            raise ChannelInUse(CHANNEL_IN_USE)
+            raise ChannelInUse(SEND_REFUSED)
         if status >= 400:
             raise ChannelRefused(SEND_REFUSED)
         try:
@@ -363,8 +378,9 @@ class TelegramAdapter:
         # know how Telegram spells it. The command itself is dropped and ``text``
         # keeps only the payload, which is the pairing code when the person scanned
         # the desktop's QR code. A bare ``/start`` becomes an empty text with
-        # ``is_start`` set, and it is kept rather than dropped for being empty
-        # because the service needs to tell it apart from a wrong code.
+        # ``is_start`` set. It is kept rather than dropped for being empty, because a
+        # paired phone that opens the chat again is answered with the paired
+        # sentence.
         start = _START_COMMAND.fullmatch(text)
         if start is not None:
             text = (start.group("payload") or "").strip()

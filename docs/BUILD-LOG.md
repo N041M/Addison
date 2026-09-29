@@ -26,8 +26,8 @@ found four ways the flow failed with no message to the person.
 2. Telegram sends `/start` the first time anybody opens a bot. The turn offered it as
    a code, so it spent one of the window's three attempts.
 3. A failed attempt is answered with silence. That is a deliberate owner decision,
-   because a reply tells a stranger the bot is live, and it stays. The other fixes make
-   a failed attempt much less likely.
+   because a reply tells a stranger the bot is live. This change keeps the silence and
+   makes a failed attempt much less likely instead.
 4. When a webhook is set on the bot or another program polls the same token, Telegram
    answers `getUpdates` with 409. The adapter raised a refusal, the poll loop caught it
    as an unknown error, and it backed off forever with "Telegram isn't answering" while
@@ -109,9 +109,72 @@ What the build and its mutation pass found:
 - The paired sentence had an em-dash tail and now reads as three sentences. No test
   pinned its words, because every test imports the constant.
 
-Two things stay open, and [`KNOWN-GAPS.md`](KNOWN-GAPS.md) holds both. Opening the app
-still does not start listening. A wrong code-shaped message that waited at Telegram
-before a window opened can still spend one of its attempts.
+An independent review of the whole change found no way for a stranger to pair without
+the code. It found these, and the second round of fixes closed them.
+
+- **The code compare raised on text outside ASCII.** `automation_nonce.matches`
+  passed `str` values to `hmac.compare_digest`, which raises `TypeError` for any
+  character outside ASCII. A stranger's emoji or accented letter vanished inside the
+  turn's catch-all, uncounted. While a pairing window was open, a paired phone's
+  "/start it’s me" got no reply either, because its payload was compared against the
+  code. The
+  arming ceremony had the same fault before this change existed: a code typed on a
+  Czech keyboard, where the unshifted 2, 3, 4, 7 and 9 keys give ě, š, č, ý and í,
+  raised instead of costing an attempt. The owner is Czech. The compare now works on
+  UTF-8 bytes.
+- **A window outlived its loop, and the desk never heard a window close.**
+  `_stop_and_say` now closes an open window as `stop` does. When a message finds a
+  window expired or spent, the desk now hears `pairing_closed` and stops showing a
+  dead QR code. `_stop_and_say` also wrote the status after releasing its lock, so a
+  Start pressed in that instant could be overwritten, and it now writes it inside.
+- **A paired account that re-scanned the live code told the desk "a phone paired".**
+  It now sends `already_paired`.
+- **"No token saved" looked like "unreachable".** `verify` reported an empty keychain
+  as `ChannelUnavailable`, so "Pair a phone" said "try again in a moment" and "Check
+  now" said the service could not be reached. `verify` now raises `ChannelNoToken`,
+  and both methods say to paste a token. "Pair a phone" answers `_CHECK_FAILED`
+  after any other failed check whenever the token is not recorded as present,
+  including `absent`, because a new token may have been saved since.
+- **The ask-first guard was asked at pairing only when no loop was running.** Two
+  mutations survived the first suite: this one, and removing `re.DOTALL` from the start
+  pattern. The guard is now asked every time. The pattern now matches one line only,
+  so a paired person's message of several lines that begins with `/start` reaches the
+  model. Each survivor now has a test that turns red.
+- **Text and docs.** The paired sentence now says "Your account" because pairing binds
+  the account, and it no longer names the transport. The in-use sentence was removed,
+  because nothing showed it and the panel carries its own words. Several comments had
+  gone stale in this diff or named Telegram above the adapter, and the prose added
+  here was rewritten to the owner's plain style.
+
+The second round added 15 mutations to the pass, for 66 in all. Several were run
+against more than one test, which makes 76 runs, and each turned its test red for the
+intended reason.
+
+A regression review of the second round found two more, and a third round fixed them.
+
+- **The second round made `absent` stick.** It recorded `absent` when the keychain
+  was empty. Saving a token goes from the webview to the keychain through the shell
+  and never tells the core (G1), so nothing reset it. A person who pressed Check now
+  before pasting the token then saw "No token saved yet" beside "Token saved", and
+  Start listening refused. An empty keychain now records nothing, the row stays as it
+  was, and `absent` again means only that the transport rejected a token. Both
+  methods still say to paste a token.
+- **A paired account that typed the live code got a model turn.** The panel invites
+  a person to type the code as well as scan it. A paired account that typed it had
+  the code sent to the model as a question, and the desk kept the QR code up until
+  the deadline. That text now takes the same path as a start. The window closes, the
+  phone gets the paired sentence, the desk hears `already_paired`, and no turn runs.
+  Any other text from a paired sender, including a wrong code, still runs a turn and
+  spends nothing.
+
+After the third round the pass holds 68 mutations in 79 runs. The two that had
+asserted an `absent` write now assert that nothing is written, two cover the typed
+code, and every run turned red for the intended reason.
+
+Three things stay open, and [`KNOWN-GAPS.md`](KNOWN-GAPS.md) holds them. Opening the
+app still does not start listening. A wrong code-shaped message that waited at the
+transport before a window opened can still spend one of its attempts. A window can
+open just after its loop has stopped, when the loop's first poll fails at once.
 
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 

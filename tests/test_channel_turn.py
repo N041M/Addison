@@ -64,11 +64,11 @@ from agent_core.channel_service import (
     CONTINUATION_MARKER,
     MAX_PENDING_REQUESTS,
     PENDING_REQUEST_MAX_AGE_SECONDS,
+    STATE_IN_USE,
     ChannelService,
     split_message,
 )
 from agent_core.channels.adapter import (
-    CHANNEL_IN_USE,
     SEND_REFUSED,
     TOKEN_REJECTED,
     TRANSPORT_UNREACHABLE,
@@ -87,6 +87,7 @@ from agent_core.providers.base import ModelResponse, ProviderCapabilities, ToolC
 from agent_core.rpc.channels import (
     _ARRIVED_WHILE_ASLEEP,
     _GUARDS_REFUSE_REMOTE,
+    _NO_TOKEN_SAVED,
     _ONE_AT_A_TIME,
     _PAIRED,
     _REMOTE_CONVERSATION_TITLE,
@@ -1399,9 +1400,13 @@ def test_a_paired_phone_scanning_the_live_code_closes_the_window(tmp_path):
     the code leaves the window alone and spends none of its attempts, because a
     paired sender is not guessing their way in.
 
-    Mutations: skip the ``cancel_pairing`` in ``_answer_paired_start`` (the window
-    stays open); skip its ``paired`` notification; check the payload with ``offer``
-    instead of ``confirms`` (the wrong payload spends an attempt)."""
+    The desk hears ``already_paired`` and never ``paired``, because no new pairing
+    was made and the panel would otherwise report one.
+
+    Mutations: skip the ``cancel_pairing`` in ``_answer_already_paired`` (the window
+    stays open); skip its notification; send ``paired`` instead of
+    ``already_paired``; check the payload with ``offer`` instead of ``confirms``
+    (the wrong payload spends an attempt)."""
     harness, telegram, provider = _server(tmp_path)
     try:
         channel = _Channel(harness, telegram, provider)
@@ -1410,13 +1415,49 @@ def test_a_paired_phone_scanning_the_live_code_closes_the_window(tmp_path):
         channel.message("AAA-AAA", start=True)
         pending = harness.server._channel_service.pending_pairing(channel.id)
         assert pending is not None and pending.attempts_left == 3
-        assert not _frames(harness, "channel.remoteTurn", id=channel.id, phase="paired")
+        assert not _frames(harness, "channel.remoteTurn", id=channel.id, phase="already_paired")
 
         channel.message(code, start=True)
         assert harness.server._channel_service.pending_pairing(channel.id) is None
-        assert _frames(harness, "channel.remoteTurn", id=channel.id, phase="paired")
+        assert _frames(harness, "channel.remoteTurn", id=channel.id, phase="already_paired")
+        assert not _frames(harness, "channel.remoteTurn", id=channel.id, phase="paired")
         assert telegram.sent() == [_PAIRED, _PAIRED]
         assert provider.offered == []
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_paired_account_that_types_the_live_code_closes_the_window(tmp_path):
+    """The panel invites a person to type the code as well as scan it. An account
+    that is already paired and types the live code is not asking the model anything,
+    so it takes the same path as a start. It gets the paired sentence, runs no turn,
+    the window closes and the desk hears ``already_paired``. Text that is not the
+    code, typed while the window is open, runs an ordinary turn and spends nothing,
+    whether or not it is shaped like a code.
+
+    Mutations: drop ``or self._carries_live_code(...)`` from step 3b (the typed code
+    runs a model turn); make ``_carries_live_code`` true for any text while a window
+    is open (the question gets the paired sentence); check with ``offer`` instead of
+    ``confirms`` (the wrong code-shaped text spends an attempt)."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        code = _call(harness, "channel.beginPairing", {"id": channel.id}, 56)["code"]
+        wrong = "CDE-FGH" if code != "CDE-FGH" else "DEF-GHJ"
+        channel.message("what is the capital of France?")
+        channel.message(wrong)
+        assert telegram.sent() == ["Here you go.", "…"]
+        pending = harness.server._channel_service.pending_pairing(channel.id)
+        assert pending is not None and pending.attempts_left == 3
+
+        channel.message(code.lower())
+        assert telegram.sent() == ["Here you go.", "…", _PAIRED]
+        assert len(provider.offered) == 2, "the typed code must not reach a model"
+        assert harness.server._channel_service.pending_pairing(channel.id) is None
+        assert _frames(harness, "channel.remoteTurn", id=channel.id, phase="already_paired")
+        assert not _frames(harness, "channel.remoteTurn", id=channel.id, phase="paired")
     finally:
         harness.server._channel_service.stop_all()
         _shutdown(harness.reader, harness.thread)
@@ -1508,6 +1549,161 @@ def test_a_backlog_of_ordinary_messages_leaves_the_window_for_the_code(tmp_path)
         telegram.update(update_id=4, text=f"/start {code}", sender="12345")
         _until(lambda: telegram.sent() == [_PAIRED])
         assert len(_call(harness, "channel.pairings", {"id": channel.id}, 45)["pairings"]) == 1
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_text_outside_ascii_in_a_pairing_window_is_wrong_and_counted(tmp_path):
+    """``automation_nonce.matches`` used ``hmac.compare_digest`` on ``str``, which
+    raises ``TypeError`` for any character outside ASCII. A stranger's emoji, an
+    accented letter, a phone's smart apostrophe or a zero-width space raised inside
+    the turn, and the catch-all swallowed it, so the message was neither answered
+    ``WRONG`` nor counted. The compare now works on UTF-8 bytes. Such text spends no
+    attempt, because it cannot be a code, and it is counted as a stranger knocking.
+
+    Mutation: compare the normalised ``str`` values again in ``matches`` — the turn
+    raises, the counter stays at zero, and this fails."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        _call(harness, "channel.beginPairing", {"id": channel.id}, 46)
+        for text in ["Dobrý den 👋", "it\u2019s me", "ACD\u200bEFG"]:
+            channel.message(text, sender="12345")
+        channel.message("\u011b\u0161\u010d-\u00fd\u00ed\u011b", sender="12345", start=True)
+        assert telegram.to_a_chat() == []
+        pending = harness.server._channel_service.pending_pairing(channel.id)
+        assert pending is not None and pending.attempts_left == 3
+        assert _call(harness, "channel.status", {"id": channel.id}, 47)["unknownSenders"] == 4
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_paired_start_with_text_outside_ascii_still_gets_the_paired_sentence(tmp_path):
+    """The same fault on the paired side. With a window open, a paired phone's start
+    is compared against the code, and a payload such as "it’s me" raised there, so
+    the phone got no reply at all.
+
+    Mutation: compare the normalised ``str`` values again in ``matches`` — nothing
+    is sent and this fails."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        _call(harness, "channel.beginPairing", {"id": channel.id}, 48)
+        channel.message("it\u2019s me", start=True)
+        assert telegram.sent() == [_PAIRED]
+        pending = harness.server._channel_service.pending_pairing(channel.id)
+        assert pending is not None and pending.attempts_left == 3
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+@pytest.mark.parametrize("ending", ["spent", "expired"])
+def test_a_window_that_ends_on_a_message_tells_the_desk(tmp_path, ending):
+    """When a message finds a window spent or past its deadline, the window closes,
+    and the desk now hears ``pairing_closed`` so it stops showing a QR code nothing
+    will accept. Before this the desk was never told. The phone still hears
+    nothing.
+
+    Mutation: drop the ``pairing_closed`` notification from ``_offer_pairing`` —
+    no frame arrives and this fails."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        _call(harness, "channel.beginPairing", {"id": channel.id}, 49)
+        service = harness.server._channel_service
+        if ending == "spent":
+            for guess in ["CDE-FGH", "DEF-GHJ", "EFG-HJK"]:
+                channel.message(guess, sender="12345")
+        else:
+            pending = service.pending_pairing(channel.id)
+            assert pending is not None
+            pending.expires_at = 0
+            channel.message("CDE-FGH", sender="12345")
+        assert service.pending_pairing(channel.id) is None
+        closed = _frames(harness, "channel.remoteTurn", id=channel.id, phase="pairing_closed")
+        assert len(closed) == 1 and "summary" not in closed[0]["params"]
+        assert telegram.to_a_chat() == []
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_window_closes_when_the_loop_stops_on_its_own(tmp_path):
+    """``stop`` has always closed the window, and ``_stop_and_say`` now does too. A
+    loop that stops because another program reads the bot leaves nothing listening
+    for the code, so a window left open would show a QR code that can never work.
+
+    Mutation: drop the ``_pending.pop`` from ``_stop_and_say`` — the window
+    outlives the loop and this fails."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        assert _call(harness, "channel.beginPairing", {"id": channel.id}, 50)["ok"]
+        service = harness.server._channel_service
+        assert service.pending_pairing(channel.id) is not None
+        telegram.updates_status = 409
+        harness.writer.wait_for(
+            lambda f: f.get("method") == "channel.stateChanged"
+            and f.get("params", {}).get("state") == "in_use"
+        )
+        assert service.pending_pairing(channel.id) is None
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_pair_a_phone_under_the_ask_first_guard_refuses_even_while_listening(tmp_path):
+    """The guard used to be asked only when "Pair a phone" had to start a loop, so a
+    channel that was already listening opened a window under it. A phone paired then
+    could get no answers. The guard is now asked every time.
+
+    Mutation: ask the guard only when nothing is listening — a window opens and this
+    fails."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        assert _call(harness, "channel.setEnabled", {"id": channel.id, "enabled": True}, 51)["ok"]
+        _call(harness, "profile.set", {"profileId": "custom"}, 52)
+        saved = _call(
+            harness,
+            "guards.set",
+            {"destructiveCard": "per_invocation", "autoGrantScope": "none"},
+            53,
+        )
+        assert saved.get("ok") is True, saved
+        service = harness.server._channel_service
+        assert service.listening_channels() == [channel.id]
+
+        answer = _call(harness, "channel.beginPairing", {"id": channel.id}, 54)
+        assert answer == {"ok": False, "error": _GUARDS_REFUSE_REMOTE}
+        assert service.pending_pairing(channel.id) is None
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+@pytest.mark.parametrize(
+    "text", ["/start what I meant to ask\nis this", "/start\nwhat is the capital of France?"]
+)
+def test_a_message_of_several_lines_that_begins_with_start_is_an_ordinary_turn(tmp_path, text):
+    """A start link never carries a line break, so a message of several lines is
+    somebody writing, even when it begins with ``/start``. A paired person's message
+    like that reaches the model.
+
+    Mutations: put ``re.DOTALL`` back on ``_START_COMMAND`` (the first message
+    becomes a start); widen ``[ \\t]+`` back to ``\\s+`` (the second does)."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        telegram.update(update_id=1, text=text)
+        assert _call(harness, "channel.setEnabled", {"id": channel.id, "enabled": True}, 55)["ok"]
+        _until(lambda: bool(telegram.sent()))
+        assert telegram.sent() == ["Here you go."]
     finally:
         harness.server._channel_service.stop_all()
         _shutdown(harness.reader, harness.thread)
@@ -1624,22 +1820,39 @@ def test_a_token_refused_on_send_still_stops_the_loop_that_is_running(tmp_path):
 
 
 def test_checking_a_connection_with_no_token_saved_asks_telegram_nothing(tmp_path):
-    """An empty keychain entry is not a credential, and a request made with one goes
-    to a real service and can only fail. "Check now" and "Pair a phone" both ask
-    through ``ChannelService.verify``, which raises before any request when there is
-    nothing to ask with. The answer is unchanged, and nothing is recorded about the
-    token.
+    """A person adds a connection and presses Check now before pasting the token.
+    An empty keychain entry is not a credential, and a request made with one goes to
+    a real service and can only fail, so ``ChannelService.verify`` raises
+    ``ChannelNoToken`` before any request, and the person is told to paste a token.
 
-    Mutation: remove the empty-token check in ``verify`` — ``getMe`` goes out with
-    an empty token and this fails on the request list."""
+    Nothing is recorded. Saving the token afterwards goes from the webview to the
+    keychain and never tells the core (G1), so an ``absent`` written here would
+    still say "no token saved" after the person saved one. The row stays
+    ``unknown`` until a check can ask the transport, which the second half of the
+    test does once the token is saved.
+
+    Mutations: remove the empty-token check in ``verify`` (``getMe`` goes out with
+    an empty token); raise ``ChannelUnavailable`` there instead of ``ChannelNoToken``
+    (the answer says the service could not be reached); drop the ``ChannelNoToken``
+    branch from ``_channel_connect`` (the same); write ``absent`` in that branch
+    (the row no longer reads ``unknown``)."""
     harness, telegram, provider = _server(tmp_path)
     try:
-        channel = _Channel(harness, telegram, provider)
+        _call(harness, "profile.set", {"profileId": "developer"}, 900)
+        harness.server._channel_service._adapters["telegram"] = TelegramAdapter(
+            client=httpx.Client(transport=httpx.MockTransport(telegram.handler))
+        )
+        _call(harness, "channel.add", {"kind": "telegram", "name": "My phone"}, 901)
+        channel_id = _call(harness, "channel.list", {}, 902)["channels"][0]["id"]
         harness.server._shell_bridge.token = ""  # type: ignore[union-attr]
-        answer = _call(harness, "channel.connect", {"id": channel.id}, 76)
-        assert answer == {"ok": False, "error": TRANSPORT_UNREACHABLE}
+        answer = _call(harness, "channel.connect", {"id": channel_id}, 76)
+        assert answer == {"ok": False, "error": _NO_TOKEN_SAVED}
         assert telegram.requests == []
-        assert _call(harness, "channel.list", {}, 77)["channels"][0]["tokenPresent"] == "present"
+        assert _call(harness, "channel.list", {}, 77)["channels"][0]["tokenPresent"] == "unknown"
+
+        harness.server._shell_bridge.token = _TOKEN  # type: ignore[union-attr]
+        assert _call(harness, "channel.connect", {"id": channel_id}, 78)["ok"] is True
+        assert _call(harness, "channel.list", {}, 79)["channels"][0]["tokenPresent"] == "present"
     finally:
         _shutdown(harness.reader, harness.thread)
 
@@ -1736,7 +1949,7 @@ def _assert_the_new_loop_is_untouched(service: ChannelService, adapter: _Replace
         RuntimeError("a defect nobody anticipated"),
         ChannelUnavailable(TRANSPORT_UNREACHABLE),
         ChannelAuthFailed(TOKEN_REJECTED),
-        ChannelInUse(CHANNEL_IN_USE),
+        ChannelInUse(SEND_REFUSED),
         PollResult(messages=(), next_cursor="5"),
     ],
     ids=["defect", "unreachable", "token-rejected", "in-use", "answered"],
@@ -1787,6 +2000,46 @@ def test_a_loop_replaced_while_it_read_the_keychain_leaves_the_new_loop_alone():
     old = service._threads["chan-1"]
     try:
         _assert_the_new_loop_is_untouched(service, adapter, old)
+    finally:
+        adapter.release.set()
+        service.stop_all()
+
+
+class _StartPressedWhenSet(threading.Event):
+    """A loop's stop event that runs ``on_set`` the moment it is set, which stands
+    for a person pressing Start in that instant."""
+
+    def __init__(self, on_set) -> None:
+        super().__init__()
+        self._on_set = on_set
+
+    def set(self) -> None:
+        super().set()
+        on_set, self._on_set = self._on_set, None
+        if on_set is not None:
+            on_set()
+
+
+def test_a_start_pressed_while_a_loop_is_stopping_is_not_written_over():
+    """``_stop_and_say`` removes the loop, releases the lock, and then sets the
+    loop's stop event. A person can press Start in that gap. The status used to be
+    written after the gap, so a new loop's "listening" could be overwritten with the
+    old loop's reason for stopping. It is now written inside the same lock as the
+    removals, so the new loop's status stands.
+
+    Mutation: write the status after the lock again, with
+    ``self._set_state(channel_id, state, error=None)`` after ``stop.set()`` — the new
+    loop reads ``in_use`` and this fails."""
+    adapter = _ReplacedMidPoll(None, replace_on_first_poll=False)
+    service = _replaced_service(adapter)
+    own = _StartPressedWhenSet(lambda: service.start("chan-1", "telegram"))
+    with service._lock:
+        service._stops["chan-1"] = own
+    try:
+        service._stop_and_say("chan-1", STATE_IN_USE, own=own)
+        assert adapter.new_loop_polling.wait(5), "the new loop never polled"
+        assert service.status("chan-1").state == "listening"
+        assert service.listening_channels() == ["chan-1"]
     finally:
         adapter.release.set()
         service.stop_all()

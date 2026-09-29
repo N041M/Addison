@@ -40,7 +40,7 @@
 // paired phone is the same shape, for the same reason.
 
 import { useMemo, useState } from "react";
-import type { ChannelsCardState } from "../hooks/useChannels";
+import type { ChannelsCardState, RemoteTurnNote } from "../hooks/useChannels";
 import type { Channel, ChannelPairingWindow, ChannelStatus } from "../types/ui";
 import { PairingQr, pairingQrModules } from "./PairingQr";
 import { RowAction, SurfaceRow } from "./Surface";
@@ -226,6 +226,27 @@ function PairingBlock({
   );
 }
 
+/** The line under a row about the last thing that happened on the phone side.
+ * "started", "answered", "paired", "already_paired" and "pairing_closed" each have
+ * a sentence here. Every other phase, including "declined", "refused" and "failed",
+ * shows the core's own summary when it sent one, and no line when it did not. */
+export function remoteTurnLine(turn: RemoteTurnNote): string | null {
+  switch (turn.phase) {
+    case "started":
+      return "A message came in from your phone.";
+    case "answered":
+      return "Addison answered a message from your phone.";
+    case "paired":
+      return "A phone paired with this connection.";
+    case "already_paired":
+      return "This Telegram account was already paired.";
+    case "pairing_closed":
+      return "That pairing code stopped working. Press Pair a phone for a new one.";
+    default:
+      return turn.summary || null;
+  }
+}
+
 function formatWhen(at?: number): string {
   if (!at) return "";
   try {
@@ -382,6 +403,8 @@ export function ChannelsPanel({
           const live = status?.state === "listening" || status?.state === "backing_off";
           const paired = pairings[channel.id] ?? [];
           const pairingHere = pairing?.channelId === channel.id ? pairing : null;
+          const turnLine =
+            lastRemoteTurn?.channelId === channel.id ? remoteTurnLine(lastRemoteTurn) : null;
           return (
             <SurfaceRow
               key={channel.id}
@@ -460,16 +483,8 @@ export function ChannelsPanel({
                       "Addison didn't reply."}
                 </p>
               )}
-              {lastRemoteTurn?.channelId === channel.id && (
-                <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
-                  {lastRemoteTurn.phase === "answered"
-                    ? "Addison answered a message from your phone."
-                    : lastRemoteTurn.phase === "paired"
-                      ? "A phone paired with this connection."
-                      : lastRemoteTurn.summary
-                        ? lastRemoteTurn.summary
-                        : "A message came in from your phone."}
-                </p>
+              {turnLine && (
+                <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{turnLine}</p>
               )}
 
               {/* Paired phones, each with a Revoke. The whole control surface a

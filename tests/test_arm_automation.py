@@ -1074,6 +1074,33 @@ def test_a_wrong_code_re_shows_the_card_with_one_fewer_attempt(tmp_path):
         _shutdown(h.reader, h.thread)
 
 
+def test_a_code_typed_on_a_czech_keyboard_costs_one_attempt_and_asks_again(tmp_path):
+    """On a Czech keyboard the unshifted 2, 3, 4, 7 and 9 keys give ě, š, č, ý and
+    í, so a person copying a code with digits in it can type letters outside ASCII
+    without noticing. ``hmac.compare_digest`` raised ``TypeError`` on such text,
+    and the exception left ``_ask_with_keyword`` instead of costing one attempt. The
+    compare now works on UTF-8 bytes, so the answer is an ordinary wrong answer. The
+    card comes back with one fewer attempt, and the right code still grants.
+
+    Mutation: compare the normalised ``str`` values in ``automation_nonce.matches``
+    again — the ceremony raises, no second card arrives, and this fails."""
+    h = build_server(tmp_path)
+    try:
+        thread, out = _ask(h, _PREVIEW)
+        first = _wait_for_card(h, 1)["params"]["arming"]
+        _answer(h, 1, allow=True, typed="\u011b\u0161\u010d-\u00fd\u00ed\u011b")
+
+        second = _wait_for_card(h, 2)["params"]["arming"]
+        assert second["nonce"] == first["nonce"]
+        assert second["attemptsLeft"] == automation_nonce.MAX_ATTEMPTS - 1
+
+        _answer(h, 2, allow=True, typed=first["nonce"])
+        thread.join(timeout=5)
+        assert out == [PermissionStatus.GRANTED]
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
 def test_three_wrong_codes_deny_the_request_and_stop_asking(tmp_path):
     """The budget is the thing that makes starting over — with a NEW code — the only
     strategy, rather than guessing being merely slow. Three cards, then denial, and

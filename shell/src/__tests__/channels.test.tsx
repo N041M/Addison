@@ -506,6 +506,51 @@ describe("the live picture", () => {
     );
     expect(screen.getByText("Addison answered a message from your phone.")).toBeTruthy();
   });
+
+  it("says what each phone-side event was, and nothing for one it does not know", () => {
+    const cases: Array<[string, string | undefined, string | null]> = [
+      ["started", undefined, "A message came in from your phone."],
+      ["answered", undefined, "Addison answered a message from your phone."],
+      ["paired", undefined, "A phone paired with this connection."],
+      ["already_paired", undefined, "This Telegram account was already paired."],
+      [
+        "pairing_closed",
+        undefined,
+        "That pairing code stopped working. Press Pair a phone for a new one.",
+      ],
+      // The core's own sentence for a turn it declined, refused or could not finish.
+      ["failed", "Addison couldn't answer that just now.", "Addison couldn't answer that just now."],
+      // A phase this window does not know shows the core's sentence when it sent one,
+      // and nothing otherwise. It never claims a message came in.
+      ["something_new", "Addison did a new thing.", "Addison did a new thing."],
+      ["something_new", undefined, null],
+    ];
+    // The row with no phone-side line at all, to compare the unknown case against.
+    render(<ChannelsPanel connected channels={stateWith({ channels: [channel()] })} />);
+    const withoutLine = document.body.textContent ?? "";
+    cleanup();
+    for (const [phase, summary, line] of cases) {
+      render(
+        <ChannelsPanel
+          connected
+          channels={stateWith({
+            channels: [channel()],
+            lastRemoteTurn: { channelId: "a", phase, summary, at: 1 },
+          })}
+        />,
+      );
+      const text = document.body.textContent ?? "";
+      if (line) {
+        expect(screen.getByText(line), `phase ${phase}`).toBeTruthy();
+      } else {
+        expect(text, `phase ${phase}`).toBe(withoutLine);
+      }
+      if (phase !== "started") {
+        expect(text, `phase ${phase}`).not.toContain("A message came in from your phone.");
+      }
+      cleanup();
+    }
+  });
 });
 
 /** Words a person aged 54 or 68 should never meet on the pairing block. */
@@ -971,13 +1016,19 @@ vi.mock("../ipc/client", async (importOriginal) => {
   return {
     ...actual,
     isEngineConnected: () => true,
-    subscribeCoreState: () => () => {},
+    // The engine-state channel, recorded so a test can deliver "restarting",
+    // "stopped", "error" or "ready" the way the app hears them.
+    subscribeCoreState: (handler: (state: string) => void) => {
+      coreStateHandlers.push(handler);
+      return () => {};
+    },
     // The notification channel, stubbed. The real one reaches for Tauri's event
     // bridge, which is not in a jsdom window — and the hook subscribes on mount, so
     // without this every hook test below would leave an unhandled rejection behind
     // it and the suite would be reporting green over a thrown error.
-    subscribe: (_method: string, handler: (params: Record<string, unknown>) => void) => {
+    subscribe: (method: string, handler: (params: Record<string, unknown>) => void) => {
       notificationHandlers.push(handler);
+      (handlersByMethod[method] ??= []).push(handler);
       return () => {};
     },
     ipc: {
@@ -985,8 +1036,10 @@ vi.mock("../ipc/client", async (importOriginal) => {
       listChannels: vi.fn(async () => []),
       addChannel: vi.fn(async () => ({ ok: true })),
       removeChannel: vi.fn(async () => ({ ok: true })),
+      // Listening, because asking for a pairing code starts listening and a status
+      // in any other state closes the pairing window.
       channelStatus: vi.fn(async () => ({
-        state: "stopped",
+        state: "listening",
         backoffSeconds: 0,
         unknownSenders: 0,
       })),
@@ -994,7 +1047,12 @@ vi.mock("../ipc/client", async (importOriginal) => {
       connectChannel: vi.fn(async () => ({ ok: true, connectedAs: "addison_bot" })),
       setChannelEnabled: vi.fn(async () => ({ ok: true })),
       setChannelOnWake: vi.fn(async () => ({ ok: true })),
-      beginChannelPairing: vi.fn(async () => ({ ok: true, code: "ABC-DEF", expiresAt: 9 })),
+      // Five minutes from now, the window the core opens.
+      beginChannelPairing: vi.fn(async () => ({
+        ok: true,
+        code: "ABC-DEF",
+        expiresAt: Math.floor(Date.now() / 1000) + 300,
+      })),
       cancelChannelPairing: vi.fn(async () => ({ ok: true })),
       revokeChannelPairing: vi.fn(async () => ({ ok: true })),
       channelPendingRequests: vi.fn(async () => []),
@@ -1006,6 +1064,30 @@ vi.mock("../ipc/client", async (importOriginal) => {
 /** Every handler the hook has subscribed with, so a test can push a notification
  * frame at it the way the core would. */
 const notificationHandlers: Array<(params: Record<string, unknown>) => void> = [];
+/** Every engine-state handler the hook has subscribed with. */
+const coreStateHandlers: Array<(state: string) => void> = [];
+
+/** Deliver one engine state, as the shell's `core-status` event would. */
+function emitCoreState(state: string) {
+  act(() => {
+    for (const handler of coreStateHandlers) handler(state);
+  });
+}
+
+/** The same handlers by method, for a test that must send one kind of frame only. */
+const handlersByMethod: Record<string, Array<(params: Record<string, unknown>) => void>> = {};
+
+/** Send one notification frame, as the core would, to the handlers for `method`. */
+function emit(method: string, params: Record<string, unknown>) {
+  act(() => {
+    for (const handler of handlersByMethod[method] ?? []) handler(params);
+  });
+}
+
+/** A status in one state, in the shape the parser produces. */
+function statusIn(state: ChannelStatus["state"]): ChannelStatus {
+  return { state, backoffSeconds: 0, unknownSenders: 0 };
+}
 
 describe("useChannels (real hook, mocked ipc)", () => {
   beforeEach(() => {
@@ -1189,7 +1271,7 @@ describe("useChannels (real hook, mocked ipc)", () => {
     expect(result.current.pairing).toEqual({
       channelId: "a",
       code: "ABC-DEF",
-      expiresAt: 9,
+      expiresAt: expect.any(Number),
     });
     await act(async () => {
       await result.current.handleCancelPairing(row);
@@ -1200,10 +1282,11 @@ describe("useChannels (real hook, mocked ipc)", () => {
 
   it("carries the start link into the pairing window", async () => {
     const { ipc } = await import("../ipc/client");
+    const expiresAt = Math.floor(Date.now() / 1000) + 300;
     (ipc.beginChannelPairing as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: true,
       code: "ABC-DEF",
-      expiresAt: 9,
+      expiresAt,
       link: LINK,
     });
     const { result } = renderHook(() => useChannels({ connected: true }));
@@ -1213,7 +1296,7 @@ describe("useChannels (real hook, mocked ipc)", () => {
     expect(result.current.pairing).toEqual({
       channelId: "a",
       code: "ABC-DEF",
-      expiresAt: 9,
+      expiresAt,
       link: LINK,
     });
   });
@@ -1293,6 +1376,187 @@ describe("useChannels (real hook, mocked ipc)", () => {
       for (const handler of notificationHandlers) handler({ id: "a", phase: "paired" });
     });
     expect(result.current.pairing).toBeNull();
+  });
+
+  it("closes the window when the core says the account was already paired", async () => {
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleBeginPairing(channel());
+    });
+    emit("channel.remoteTurn", { id: "a", phase: "already_paired" });
+    expect(result.current.pairing).toBeNull();
+    expect(result.current.lastRemoteTurn).toMatchObject({ channelId: "a", phase: "already_paired" });
+  });
+
+  it("closes the window when the core closed it, and says so only for a window on screen", async () => {
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleBeginPairing(channel());
+    });
+    emit("channel.remoteTurn", { id: "a", phase: "pairing_closed" });
+    expect(result.current.pairing).toBeNull();
+    expect(result.current.lastRemoteTurn).toMatchObject({ channelId: "a", phase: "pairing_closed" });
+    // With no window open there is no code that stopped working, so the line keeps
+    // saying what it said.
+    emit("channel.remoteTurn", { id: "a", phase: "answered" });
+    emit("channel.remoteTurn", { id: "a", phase: "pairing_closed" });
+    expect(result.current.lastRemoteTurn).toMatchObject({ channelId: "a", phase: "answered" });
+  });
+
+  it("closes the window at its deadline and says the code stopped working", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const { ipc } = await import("../ipc/client");
+      const expiresAt = Math.floor(Date.now() / 1000) + 300;
+      (ipc.beginChannelPairing as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        code: "ABC-DEF",
+        expiresAt,
+      });
+      const { result } = renderHook(() => useChannels({ connected: true }));
+      await act(async () => {
+        await result.current.handleBeginPairing(channel());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(299_000);
+      });
+      expect(result.current.pairing?.code).toBe("ABC-DEF");
+      expect(result.current.lastRemoteTurn).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(result.current.pairing).toBeNull();
+      expect(result.current.lastRemoteTurn).toMatchObject({
+        channelId: "a",
+        phase: "pairing_closed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forgets the deadline of a window that was cancelled or replaced", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const { ipc } = await import("../ipc/client");
+      const begin = ipc.beginChannelPairing as ReturnType<typeof vi.fn>;
+      const now = Math.floor(Date.now() / 1000);
+      const { result } = renderHook(() => useChannels({ connected: true }));
+
+      // Cancelled: its deadline passes and nothing is said.
+      begin.mockResolvedValueOnce({ ok: true, code: "ABC-DEF", expiresAt: now + 300 });
+      await act(async () => {
+        await result.current.handleBeginPairing(channel());
+      });
+      await act(async () => {
+        await result.current.handleCancelPairing(channel());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400_000);
+      });
+      expect(result.current.lastRemoteTurn).toBeNull();
+
+      // Replaced: the first window's deadline does not close the second one.
+      const later = Math.floor(Date.now() / 1000);
+      begin.mockResolvedValueOnce({ ok: true, code: "ABC-DEF", expiresAt: later + 300 });
+      begin.mockResolvedValueOnce({ ok: true, code: "XYZ-234", expiresAt: later + 600 });
+      await act(async () => {
+        await result.current.handleBeginPairing(channel());
+      });
+      await act(async () => {
+        await result.current.handleBeginPairing(channel());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400_000);
+      });
+      expect(result.current.pairing?.code).toBe("XYZ-234");
+      expect(result.current.lastRemoteTurn).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sets no deadline it cannot keep", async () => {
+    // No deadline from the core, and one further away than a timer can hold. A timer
+    // for the second would fire at once and close a window that is still open.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const { ipc } = await import("../ipc/client");
+      const begin = ipc.beginChannelPairing as ReturnType<typeof vi.fn>;
+      const { result } = renderHook(() => useChannels({ connected: true }));
+      for (const expiresAt of [undefined, Math.floor(Date.now() / 1000) + 40 * 24 * 3600]) {
+        begin.mockResolvedValueOnce({ ok: true, code: "ABC-DEF", expiresAt });
+        await act(async () => {
+          await result.current.handleBeginPairing(channel());
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10_000);
+        });
+        expect(result.current.pairing?.code, `expiresAt ${expiresAt}`).toBe("ABC-DEF");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes the window when a status says Addison stopped listening", async () => {
+    const { ipc } = await import("../ipc/client");
+    const status = ipc.channelStatus as ReturnType<typeof vi.fn>;
+    let state: ChannelStatus["state"] = "listening";
+    status.mockImplementation(async () => statusIn(state));
+    try {
+      const { result } = renderHook(() => useChannels({ connected: true }));
+      await act(async () => {
+        await result.current.handleBeginPairing(channel());
+      });
+      // Still listening, or trying to, keeps it open. So does another connection
+      // stopping.
+      state = "backing_off";
+      emit("channel.stateChanged", { id: "a", state: "backing_off" });
+      emit("channel.stateChanged", { id: "b", state: "stopped" });
+      await act(async () => {});
+      expect(result.current.pairing?.code).toBe("ABC-DEF");
+
+      // A frame that says so closes it straight away.
+      state = "listening";
+      emit("channel.stateChanged", { id: "a", state: "in_use" });
+      expect(result.current.pairing).toBeNull();
+
+      // So does a re-read that says so, when the frame carried no state.
+      await act(async () => {
+        await result.current.handleBeginPairing(channel());
+      });
+      expect(result.current.pairing?.code).toBe("ABC-DEF");
+      state = "token_rejected";
+      emit("channel.stateChanged", { id: "a" });
+      await waitFor(() => expect(result.current.pairing).toBeNull());
+      // Neither says the code stopped working. The status line says what happened.
+      expect(result.current.lastRemoteTurn).toBeNull();
+    } finally {
+      status.mockImplementation(async () => statusIn("listening"));
+    }
+  });
+
+  it("closes the window when the engine is anything but ready", async () => {
+    // The app hears the engine's state on `core-status`, and its `connected` value
+    // never changes after launch. So the engine state is what closes the window.
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleBeginPairing(channel());
+    });
+    // A fresh "ready" leaves an open window alone.
+    emitCoreState("ready");
+    await act(async () => {});
+    expect(result.current.pairing?.code).toBe("ABC-DEF");
+    for (const state of ["restarting", "stopped", "error"]) {
+      await act(async () => {
+        await result.current.handleBeginPairing(channel());
+      });
+      expect(result.current.pairing?.code, state).toBe("ABC-DEF");
+      emitCoreState(state);
+      expect(result.current.pairing, state).toBeNull();
+    }
+    expect(result.current.lastRemoteTurn).toBeNull();
   });
 
   it("reads the desk queue on mount and again when the core says one arrived", async () => {

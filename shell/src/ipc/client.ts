@@ -695,14 +695,13 @@ export const ipc = {
   refreshMcpServer: (id: string): Promise<McpRefreshResult> =>
     call(Method.McpRefresh, { id }).then(parseMcpRefresh),
 
-  // Messaging channels — the phone connections a person can save (phase 1 of
-  // three). NOT ONE OF THESE REACHES A NETWORK: `addChannel` writes a row that is
-  // switched off and connected to nothing, `listChannels` reads those rows, and
-  // `removeChannel` takes one away. There is no adapter, no poll loop and no
-  // pairing in this build. NO TOKEN RIDES THESE PAYLOADS in either direction — the
-  // token goes to the OS keychain through `storeChannelKey` below, exactly as an
-  // API key does. A refusal (a name already used, the Developer-only sentence) is a
-  // resolved {ok:false} carrying the core's own plain words, never a reject.
+  // Messaging channels, the phone connections a person can save. None of these
+  // three reaches a network. `addChannel` writes a row that is switched off,
+  // `listChannels` reads the rows, and `removeChannel` takes one away. NO TOKEN
+  // RIDES THESE PAYLOADS in either direction. The token goes to the OS keychain
+  // through `storeChannelKey` below, as an API key does. A refusal, such as a name
+  // already used or the Developer-only sentence, is a resolved {ok:false} carrying
+  // the core's own plain words. It is never a reject.
   listChannels: (): Promise<Channel[]> => call(Method.ChannelList).then(parseChannels),
   addChannel: (kind: ChannelKind, name: string): Promise<ChannelMutationResult> =>
     call(Method.ChannelAdd, { kind, name }).then(parseChannelMutation),
@@ -710,9 +709,10 @@ export const ipc = {
     call(Method.ChannelRemove, { id }).then(parseChannelMutation),
 
   // Phase 2. `connectChannel` asks Telegram who the saved token belongs to and
-  // starts nothing; `setChannelEnabled` is the one control that makes a connection
-  // live. Both are refusals-as-values: a resolved {ok:false} carrying the core's
-  // own plain sentence, never a reject and never a stack trace.
+  // starts nothing. `setChannelEnabled` switches a connection on or off, and
+  // `beginChannelPairing` also checks the token and starts listening when Addison
+  // was not listening. A refusal from any of them is a resolved {ok:false} carrying
+  // the core's own plain sentence. It is never a reject or a stack trace.
   connectChannel: (id: string): Promise<ChannelConnectResult> =>
     call(Method.ChannelConnect, { id }).then(parseChannelConnect),
   setChannelEnabled: (id: string, enabled: boolean): Promise<ChannelMutationResult> =>
@@ -723,8 +723,9 @@ export const ipc = {
     call(Method.ChannelSetOnWake, { id, onWake }).then(parseChannelMutation),
   channelStatus: (id: string): Promise<ChannelStatus> =>
     call(Method.ChannelStatus, { id }).then(parseChannelStatus),
-  // Pairing. The code comes back to THIS window and is shown on this screen; it is
-  // never sent anywhere, never stored, and gone when the window closes.
+  // Pairing. The code, and the start link that carries it, come back to THIS window.
+  // The panel shows them and stores neither, and they are gone when the pairing
+  // window closes.
   beginChannelPairing: (id: string): Promise<ChannelPairingResult> =>
     call(Method.ChannelBeginPairing, { id }).then(parseChannelPairingStart),
   cancelChannelPairing: (id: string): Promise<ChannelMutationResult> =>

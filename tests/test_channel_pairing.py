@@ -23,8 +23,9 @@ design. What these tests hold:
   (7) "Pair a phone" starts listening through the switch's own checks, returns the
       link, and records what it learned about the token the way "Check now" does.
   (8) Only text that could be a code spends an attempt. Ordinary chat, a bare Start
-      and a backlog Telegram hands over leave the window's budget alone, while every
-      code-shaped guess still costs one.
+      and text outside ASCII leave the window's budget alone. So does a backlog the
+      transport hands over, as long as none of its messages is shaped like a code.
+      Every code-shaped guess still costs one, including one waiting in a backlog.
 
 Every test here was mutation-proven; the mutations are named in the docstrings.
 """
@@ -47,9 +48,14 @@ from agent_core.channel_pairing import (
     confirms,
     offer,
 )
-from agent_core.channels.adapter import TOKEN_REJECTED
+from agent_core.channels.adapter import SEND_REFUSED, TOKEN_REJECTED, ChannelInUse
 from agent_core.channels.telegram import TelegramAdapter
-from agent_core.rpc.channels import _CHECK_FAILED, _GUARDS_REFUSE_REMOTE, _ONE_AT_A_TIME
+from agent_core.rpc.channels import (
+    _CHECK_FAILED,
+    _GUARDS_REFUSE_REMOTE,
+    _NO_TOKEN_SAVED,
+    _ONE_AT_A_TIME,
+)
 from tests.conftest import _shutdown, build_server
 from tests.test_channel_turn import _Channel
 from tests.test_channel_turn import _server as _turn_server
@@ -334,13 +340,15 @@ def test_the_code_is_never_written_to_the_database(tmp_path):
 
     Mutation: store the pending window in a settings row — the scan finds it.
 
-    The start link carries the code, so it is held to the same rule and scanned
-    for too."""
+    The start link contains the code, so the code scan covers it as well. A second
+    scan for the link itself could never fail while the first one passes, so there
+    is none."""
     harness, telegram, provider = _turn_server(tmp_path)
     try:
         channel_id = _Channel(harness, telegram, provider).id
         opened = _call(harness, "channel.beginPairing", {"id": channel_id}, 7)
-        code, link = opened["code"], opened["link"]
+        code = opened["code"]
+        assert opened["link"].endswith(f"?start={code}")
         db_path = harness.server.store.db_path
     finally:
         harness.server._channel_service.stop_all()
@@ -348,7 +356,6 @@ def test_the_code_is_never_written_to_the_database(tmp_path):
     blob = Path(db_path).read_bytes()
     assert code.encode() not in blob
     assert code.replace("-", "").encode() not in blob
-    assert link.encode() not in blob
 
 
 # ---------------------------------------------------------------------------
@@ -356,18 +363,38 @@ def test_the_code_is_never_written_to_the_database(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("typed", ["hello", "hello?", "hi there", "", "ACDEFGH", "acd efgh", None])
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "hello",
+        "hello?",
+        "hi there",
+        "",
+        "ACDEFGH",
+        "acd efgh",
+        None,
+        "Dobrý den 👋",
+        "it\u2019s me",
+        "ACD\u200bEFG",
+        "\u011b\u0161\u010d-\u00fd\u00ed\u011b",
+    ],
+)
 def test_text_that_cannot_be_a_code_spends_no_attempt(typed):
-    """``matches`` compares normalised strings, so text that is not six characters
-    from the code alphabet once normalised can never match a minted code. It is
-    answered WRONG with the budget untouched, so "hello?" typed before the code, a
-    bare Start and a backlog of ordinary messages no longer use the window up. The
-    seven-character cases are made only of alphabet characters, so it is the length
-    rule that turns them away. "hello?" is six characters, so it is the alphabet rule.
+    """``matches`` compares normalised text, so text that is not six characters from
+    the code alphabet once normalised can never match a minted code. It is answered
+    WRONG with the budget untouched, so "hello?" typed before the code, a bare Start
+    and ordinary chat no longer use the window up. The seven-character cases are made
+    only of alphabet characters, so it is the length rule that turns them away.
+    "hello?" is six characters, so it is the alphabet rule. The last four hold
+    characters outside ASCII: an emoji, a smart apostrophe, a zero-width space, and
+    the code 234-792 typed on a Czech keyboard, whose unshifted digit keys give
+    letters.
 
     Mutations: remove the ``could_be_code`` check from ``offer`` (every case spends);
     change ``== LENGTH`` to ``>= LENGTH`` in ``could_be_code`` (the seven-character
-    cases spend); drop the alphabet test from ``could_be_code`` ("hello?" spends)."""
+    cases spend); drop the alphabet test from ``could_be_code`` ("hello?" spends);
+    compare the normalised ``str`` values in ``matches`` instead of their UTF-8
+    bytes (the cases outside ASCII raise ``TypeError``)."""
     window = _window(code="ACD-EFG")
     assert offer(window, "s", typed, now=0) is PairingOutcome.WRONG
     assert window.attempts_left == 3
@@ -507,13 +534,26 @@ def test_a_start_message_arrives_as_its_payload_with_the_start_flag(typed, paylo
     assert message.text == payload
 
 
-@pytest.mark.parametrize("typed", ["ABC-DEF", "/startle", "hello /start ABC-DEF", "/stop"])
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "ABC-DEF",
+        "/startle",
+        "hello /start ABC-DEF",
+        "/stop",
+        "/start what I meant to ask\nis this",
+        "/start\nwhat is the capital of France?",
+    ],
+)
 def test_anything_else_arrives_as_an_ordinary_message(typed):
     """Only the start command is translated. A typed code still arrives as the code,
-    and text that only contains ``/start`` somewhere is somebody's words.
+    and text that only contains ``/start`` somewhere is somebody's words. So is a
+    message of several lines that begins with ``/start``, because a start link never
+    carries a line break.
 
-    Mutation: ``_START_COMMAND.search`` instead of ``fullmatch`` — ``/startle`` and
-    the third case become starts."""
+    Mutations: ``_START_COMMAND.search`` instead of ``fullmatch`` (``/startle`` and
+    the third case become starts); put ``re.DOTALL`` back on the pattern (the fifth
+    case becomes a start); widen ``[ \\t]+`` back to ``\\s+`` (the sixth does)."""
     message = TelegramAdapter()._message_from(_update(typed))
     assert message is not None
     assert message.is_start is False
@@ -598,6 +638,38 @@ def test_no_link_is_built_for_a_code_a_start_link_cannot_carry(code):
     Mutation: drop the code check in ``pairing_link`` — the link carries a space, a
     second query parameter or an over-long payload."""
     assert TelegramAdapter().pairing_link("addison_bot", code) is None
+
+
+def test_a_conflict_carries_the_send_sentence_and_no_words_of_its_own():
+    """The words for a bot another program reads live once, in the panel's status
+    line. The exception carries ``SEND_REFUSED``, because the send side is the only
+    place its sentence could reach a person, and Telegram's own description of the
+    conflict is never read.
+
+    Mutation: raise ``ChannelInUse`` with any other sentence in ``_request`` — this
+    fails."""
+    adapter = TelegramAdapter(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    409, json={"ok": False, "description": "Conflict: terminated"}
+                )
+            )
+        )
+    )
+    with pytest.raises(ChannelInUse) as raised:
+        adapter.send("tok", "999", "hello")
+    assert str(raised.value) == SEND_REFUSED
+
+
+def test_a_code_typed_outside_ascii_is_a_wrong_answer_and_never_an_error():
+    """``hmac.compare_digest`` raises ``TypeError`` on a ``str`` with any character
+    outside ASCII. ``matches`` compares UTF-8 bytes, so the answer is False.
+
+    Mutation: compare the normalised ``str`` values again — this raises."""
+    for typed in ["\u011b\u0161\u010d-\u00fd\u00ed\u011b", "it\u2019s me", "👋", "ACD\u200bEFG"]:
+        assert automation_nonce.matches(typed, "ACD-EFG") is False
+    assert automation_nonce.matches("acd efg", "ACD-EFG") is True
 
 
 # ---------------------------------------------------------------------------
@@ -716,14 +788,60 @@ def test_pair_a_phone_refuses_with_the_switchs_own_reasons_and_opens_no_window(
         _shutdown(harness.reader, harness.thread)
 
 
-def test_pair_a_phone_that_could_not_check_a_new_token_says_the_check_failed(tmp_path):
-    """Nothing has ever checked this token, and the check "Pair a phone" makes
-    cannot reach Telegram. The switch's own answer would be "Press Check now, then
-    switch it on", which makes no sense to somebody who pressed "Pair a phone". The
-    person is told the check failed, and no window opens.
+@pytest.mark.parametrize("recorded", ["unknown", "absent"])
+@pytest.mark.parametrize("cause", ["unreachable", "keychain"])
+def test_pair_a_phone_whose_check_failed_says_so_unless_the_token_is_known(
+    tmp_path, recorded, cause
+):
+    """The check "Pair a phone" makes failed, because Telegram could not be reached or
+    the keychain read failed, and the token is not recorded as present. Addison does
+    not know whether a usable token is saved. A recorded ``absent`` is included,
+    because a new token may have been saved since the last check. The switch's own
+    answer would be "Press Check now, then switch it on", which makes no sense to
+    somebody who pressed "Pair a phone", so the person is told the check failed. No
+    window opens and nothing is recorded.
 
-    Mutation: remove the ``token_present == "unknown"`` branch from
-    ``_channel_begin_pairing`` — the answer is the switch's "Check now" sentence."""
+    Mutations: remove the ``token_present != "present"`` branch from
+    ``_channel_begin_pairing`` (the switch's "Check now" or "no token" sentence
+    comes back); narrow it to ``== "unknown"`` (the ``absent`` cases fail)."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        conn = sqlite3.connect(harness.server.store.db_path)
+        conn.execute(
+            "UPDATE channels SET token_present = ? WHERE id = ?", (recorded, channel.id)
+        )
+        conn.commit()
+        conn.close()
+        if cause == "unreachable":
+            telegram.get_me_status = 502
+        else:
+
+            def unreadable(kind: str) -> str:
+                raise RuntimeError("the keychain did not answer")
+
+            harness.server._shell_bridge.get_channel_key = unreadable  # type: ignore[union-attr]
+
+        answer = _call(harness, "channel.beginPairing", {"id": channel.id}, 45)
+        assert answer == {"ok": False, "error": _CHECK_FAILED}
+        assert harness.server._channel_service.pending_pairing(channel.id) is None
+        assert harness.server._channel_service.listening_channels() == []
+        assert _call(harness, "channel.list", {}, 46)["channels"][0]["tokenPresent"] == recorded
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_pair_a_phone_with_no_token_saved_says_to_paste_one(tmp_path):
+    """The keychain answered that nothing is saved. "Try again in a moment" would
+    never help, so the answer is the sentence that says to paste a token. No request
+    is made, no loop starts and no window opens. Nothing is recorded, as with "Check
+    now", because saving the token later never tells the core, and an ``absent``
+    written here would outlive it.
+
+    Mutations: drop the ``ChannelNoToken`` branch from ``_channel_begin_pairing``
+    (pairing carries on and a code comes back); write ``absent`` in that branch
+    (the row no longer reads ``unknown``)."""
     harness, telegram, provider = _turn_server(tmp_path)
     try:
         channel = _Channel(harness, telegram, provider)
@@ -733,13 +851,13 @@ def test_pair_a_phone_that_could_not_check_a_new_token_says_the_check_failed(tmp
         )
         conn.commit()
         conn.close()
-        telegram.get_me_status = 502
-
-        answer = _call(harness, "channel.beginPairing", {"id": channel.id}, 45)
-        assert answer == {"ok": False, "error": _CHECK_FAILED}
+        harness.server._shell_bridge.token = ""  # type: ignore[union-attr]
+        answer = _call(harness, "channel.beginPairing", {"id": channel.id}, 47)
+        assert answer == {"ok": False, "error": _NO_TOKEN_SAVED}
+        assert telegram.requests == []
+        assert _call(harness, "channel.list", {}, 48)["channels"][0]["tokenPresent"] == "unknown"
         assert harness.server._channel_service.pending_pairing(channel.id) is None
         assert harness.server._channel_service.listening_channels() == []
-        assert _call(harness, "channel.list", {}, 46)["channels"][0]["tokenPresent"] == "unknown"
     finally:
         harness.server._channel_service.stop_all()
         _shutdown(harness.reader, harness.thread)

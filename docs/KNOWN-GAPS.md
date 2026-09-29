@@ -1283,6 +1283,28 @@ follows. None is scheduled and none blocks anything.
     the window would close it, because such a message cannot carry a code that did not
     exist yet. That makes `InboundMessage.sent_at` an input to pairing, which its
     docstring rules out, so it waits for an owner decision.
+  - **STILL OPEN since 2026-09-29, and small: a window can open after its loop has
+    already stopped.** "Pair a phone" starts the loop and then opens the window. If
+    the loop's first poll fails at once, for example because another program reads
+    the bot, the loop can stop in between. A loop that stops closes any open window,
+    but this window did not exist yet, so it stays open with nothing listening. The
+    desk still hears the stopped state through `channel.stateChanged`, and the
+    window runs out after five minutes. Closing it would mean refusing to open a
+    window when no loop is held, inside the service's lock, and that needs its own
+    sentence for "Pair a phone" to answer with.
+  - **CLOSED 2026-09-29: a code compare that raised on text outside ASCII.**
+    `automation_nonce.matches` passed `str` values to `hmac.compare_digest`, which
+    raises `TypeError` for any character outside ASCII. In pairing, a message with an
+    emoji, an accented letter, a smart apostrophe or a zero-width space was
+    swallowed by the turn's catch-all, so it was neither answered nor counted. While
+    a pairing window was open, a paired phone's start carrying such text got no reply
+    either, because its payload was compared against the code. In the arming
+    ceremony,
+    which is older than pairing, a code typed on a Czech keyboard (whose unshifted
+    2, 3, 4, 7 and 9 keys give ě, š, č, ý and í) raised out of `_ask_with_keyword`
+    instead of costing one attempt. The compare now works on the UTF-8 bytes of
+    both sides, and tests in `test_channel_pairing.py`, `test_channel_turn.py` and
+    `test_arm_automation.py` hold it.
 
 **Opened by the Windows port (phase 1 built 2026-08-23;
 [windows-port-plan.md](plans/windows-port-plan.md) owns the subject, the three owner

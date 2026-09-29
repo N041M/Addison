@@ -118,13 +118,17 @@ def offer(
     compare comes next, and then the decrement.
 
     Only text that could be a code spends an attempt. ``matches`` compares
-    normalised strings, so text that is not six characters from the code alphabet
+    normalised text, so text that is not six characters from the code alphabet
     once normalised (``automation_nonce.could_be_code``) can never match. It is
-    answered ``WRONG`` with the budget untouched. Every message that could match
-    still costs one, so the budget still bounds every possible guess. What changes
-    is that ordinary chat no longer uses the window up. That includes "hello?"
-    typed before the code, a bare Start, and the backlog Telegram hands over when
-    "Pair a phone" starts a loop that was not running.
+    answered ``WRONG`` with the budget untouched. That includes text with emoji,
+    accented letters or other characters outside ASCII, which ``matches`` compares
+    as UTF-8 bytes rather than raising. Every message that could match still costs
+    one, so the budget still bounds every possible guess. Ordinary chat therefore no
+    longer uses the window up. That covers "hello?" typed before the code and a bare
+    Start. It also covers messages the transport held while nothing was listening
+    and hands over when "Pair a phone" starts the loop, as long as none of them is
+    shaped like a code. A held message that is shaped like a code, such as a code
+    from an earlier window, still spends an attempt.
 
     ``sender_id`` IS NOT CONSULTED, and the parameter is here anyway. Matching is on
     the code alone: the code IS the proof, and the sender is what the caller binds

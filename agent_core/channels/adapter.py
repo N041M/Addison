@@ -4,9 +4,9 @@ Everything transport-specific sits behind this file, and nothing above it knows
 the word Telegram (docs/plans/messaging-channel-plan.md §3.2, which owns this design).
 
 The file holds four value types, one protocol and four exceptions under one base
-class. The contract is a ``Protocol`` rather than a base class, matching how
-``Tool`` and ``ShellBridge`` are declared in ``agent_core/tools/base.py``, because
-an adapter is a shape somebody satisfies rather than an inheritance chain to join.
+class. The contract is a ``Protocol``, the way ``Tool`` and ``ShellBridge`` are
+declared in ``agent_core/tools/base.py``. An adapter only has to provide these
+methods and attributes, and it does not inherit from anything here.
 
 THE TEXT THAT ARRIVES IS SOMEBODY ELSE'S WRITING. ``InboundMessage.text`` and
 ``.sender_label`` are attacker-controlled — anyone who learns a bot's name can
@@ -159,14 +159,19 @@ class ChannelInUse(ChannelRefused):
     """Another program is reading this bot's messages, so this one cannot.
 
     On Telegram this is a webhook set on the bot or a second program polling the
-    same token. The poll loop stops on it and reports the state ``in_use``. It is
-    never retried, because the fix is outside Addison. A person has to remove the
-    webhook, turn the other program off or make a new bot.
+    same token. The poll loop that is currently running stops on it and reports
+    the state ``in_use``, and it does not retry. The fix is outside Addison. A
+    person has to remove the webhook, turn the other program off or make a new bot. A
+    loop that a person has just replaced can also receive one, because the
+    transport may end the older of two open polls this way. That loop returns
+    without recording anything (``ChannelService._poll_loop``).
 
     It subclasses :class:`ChannelRefused` so that every existing
     ``except ChannelRefused`` site keeps its meaning. On the send side a conflict
     is one message that could not go, which is what a refusal already means
-    there."""
+    there. It carries ``SEND_REFUSED`` for the same reason, because the send side
+    is the only place its sentence could reach a person. The words for the stopped
+    state live once, in the panel's status line."""
 
 
 # --- plain sentences, frozen ------------------------------------------------
@@ -184,10 +189,6 @@ TRANSPORT_UNREACHABLE = (
 )
 SEND_REFUSED = "Addison couldn't deliver that message to your phone."
 MESSAGE_TOO_LONG = "Addison tried to send a message that was too long for this service."
-CHANNEL_IN_USE = (
-    "Another program is using this bot, so Addison can't read its messages. Make a "
-    "new bot for Addison with BotFather, or turn the other program off."
-)
 
 
 # --- untrusted text, at the door --------------------------------------------

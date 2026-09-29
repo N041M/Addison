@@ -848,11 +848,13 @@ class JsonRpcServer(
         # what wires everything and this service is a SECOND CALLER OF A TURN —
         # exactly the kind of thing that belongs where the wiring is.
         #
-        # CONSTRUCTING IT STARTS NOTHING. No thread, no socket, no keychain read: the
-        # adapter is an object that knows an API shape, and `channel.setEnabled` is
-        # the only thing that ever starts a loop. Everything the service needs is
-        # injected, which is what keeps it store-free (constraint b: the worker
-        # thread is the only SQLite thread) and testable against a fake transport.
+        # Constructing it starts nothing. It opens no thread and no socket and reads
+        # no keychain entry, because the adapter is only an object that knows an API
+        # shape. A loop starts only when a person presses the switch
+        # (`channel.setEnabled`) or "Pair a phone" (`channel.beginPairing`).
+        # Everything the service needs is injected, which keeps it store-free (the
+        # worker thread is the only SQLite thread, constraint b) and testable against
+        # a fake transport.
         self._channel_service = ChannelService(
             adapters={TelegramAdapter.kind: TelegramAdapter()},
             # G1: the token is fetched at the moment of use, through the shell, and
