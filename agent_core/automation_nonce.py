@@ -32,9 +32,11 @@ travels core -> webview on the card event, and comes back as the typed answer on
 which is the entire thing this exists to prevent. The model's tool_result says
 granted or denied and nothing else.
 
-This module is PURE and holds no state: minting, normalising and comparing only. The
+This module is pure and holds no state. It mints, normalises, compares, and tells
+whether text has a code's shape (`could_be_code`, which only pairing calls). The
 attempt budget and the pending-request bookkeeping belong to the caller that owns the
-card round-trip (`main.py`), because they are per-request lifetime, not arithmetic.
+card round-trip (`main.py`), because they are per-request lifetime rather than
+arithmetic.
 =============================================================================
 """
 
@@ -99,6 +101,19 @@ def normalise(typed: object) -> str:
     if not isinstance(typed, str):
         return ""
     return _SEPARATORS.sub("", typed).upper()
+
+
+def could_be_code(typed: object) -> bool:
+    """Whether ``typed``, once normalised, has the shape of a minted code: exactly
+    ``LENGTH`` characters, every one of them from ``ALPHABET``.
+
+    :func:`matches` compares normalised strings, so text that fails this can never
+    match a code :func:`mint` returned. The pairing window
+    (``agent_core/channel_pairing.py``) uses it to spend no attempt on ordinary
+    chat. It is the only caller. The arming ceremony in ``main.py`` does not call
+    it, so the arming budget still counts every wrong answer."""
+    normalised = normalise(typed)
+    return len(normalised) == LENGTH and all(char in ALPHABET for char in normalised)
 
 
 def matches(typed: object, expected: str) -> bool:

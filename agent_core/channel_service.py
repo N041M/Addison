@@ -51,14 +51,18 @@ It is never stored on this object, never logged, never put in an exception (see
 never written to SQLite.
 =============================================================================
 
-WHAT IS TRUE ABOUT RUNNING, AND WHAT IS MERELY SAVED. The ``channels.enabled``
-column is the person's saved intent; THIS SERVICE is the truth about whether
-Addison is listening. Nothing starts a loop at launch — ``channel.setEnabled`` is
-the one control that makes a channel live (plan §3.10) — so after a restart a
+What is running and what is saved are different facts. The ``channels.enabled``
+column records the person's saved intent, and this service is the truth about
+whether Addison is listening. Nothing starts a loop at launch, so after a restart a
 switched-on row has no thread behind it, and every surface reads its state from
-:meth:`status` rather than from the row. That is step 8's lesson in a different
-costume: armed truth came from the OS because the OS held it; listening truth
-comes from here because here is what holds it.
+:meth:`status` rather than from the row. This is step 8's lesson applied again.
+Armed truth came from the OS because the OS held it, and listening truth comes from
+here because this service holds it.
+
+Two person-driven controls start a loop. ``channel.setEnabled`` is the switch, and
+``channel.beginPairing`` ("Pair a phone") starts listening when the channel is not
+already listening, through the same checks, because a pairing code that nothing is
+listening for can never be answered (plan §3.10).
 """
 
 from __future__ import annotations
@@ -76,6 +80,7 @@ from agent_core.channels.adapter import (
     TRANSPORT_UNREACHABLE,
     ChannelAdapter,
     ChannelAuthFailed,
+    ChannelInUse,
     ChannelRefused,
     ChannelUnavailable,
     InboundMessage,
@@ -96,6 +101,7 @@ STATE_LISTENING = "listening"          # a poll is open, waiting for a message
 STATE_BACKING_OFF = "backing_off"      # the transport is unreachable; still trying
 STATE_TOKEN_REJECTED = "token_rejected"  # the token was refused; the loop stopped
 STATE_NO_TOKEN = "no_token"            # nothing saved to poll with; the loop stopped
+STATE_IN_USE = "in_use"                # another program reads this bot; the loop stopped
 
 #: Said on the phone when Addison could not send a whole answer.
 _UNDELIVERABLE = SEND_REFUSED
@@ -377,11 +383,19 @@ class ChannelService:
         Called from the WORKER thread by ``channel.connect`` — a network round trip
         on the worker, which is ``mcp.refresh``'s pattern and is there for its
         stated reason: a stranger's server must never hold the IPC pump. Raises the
-        adapter's own three exceptions; the RPC layer turns them into a sentence."""
+        adapter's own exceptions, and the RPC layer turns them into a sentence.
+
+        ``channel.beginPairing`` calls it too, for the bot's handle. An empty token
+        raises before any request is made. The transport has nothing to say about a
+        credential that was never read, and a request with an empty token is a
+        request to a real service that can only fail."""
         adapter = self._adapters.get(kind)
         if adapter is None:
             raise ChannelUnavailable(TRANSPORT_UNREACHABLE)
-        identity = adapter.verify_token(self._token_for(kind))
+        token = self._token_for(kind)
+        if not token:
+            raise ChannelUnavailable(TRANSPORT_UNREACHABLE)
+        identity = adapter.verify_token(token)
         with self._lock:
             # Remember WHICH TRANSPORT this row speaks. The service holds no store,
             # so every method that has to reach a transport for a channel — `deliver`
@@ -400,6 +414,17 @@ class ChannelService:
         with self._lock:
             self._pending[channel_id] = pending
         return pending
+
+    def pairing_link(self, kind: str, handle: str | None, code: str) -> str | None:
+        """The transport's start link for a pairing code, or None when the
+        transport has none or the handle or code is unusable.
+
+        The caller holds the result for the length of one response. It is not
+        stored here, because the link contains the code."""
+        adapter = self._adapters.get(kind)
+        if adapter is None or handle is None:
+            return None
+        return adapter.pairing_link(handle, code)
 
     def cancel_pairing(self, channel_id: str) -> None:
         with self._lock:
@@ -547,10 +572,13 @@ class ChannelService:
             try:
                 adapter.send(token, chat_id, part)
             except ChannelRefused:
+                # ``ChannelInUse`` lands here too, as a subclass. On the send side a
+                # conflict is one message that could not go, and the poll loop is
+                # what decides whether the channel itself has to stop.
                 self._fail(channel_id, _UNDELIVERABLE)
                 return False
             except ChannelAuthFailed:
-                self._token_rejected(channel_id)
+                self._stop_and_say(channel_id, STATE_TOKEN_REJECTED, own=None)
                 return False
             except ChannelUnavailable:
                 self._fail(channel_id, TRANSPORT_UNREACHABLE)
@@ -587,7 +615,16 @@ class ChannelService:
 
         THE CURSOR IS A LOCAL. It lives for the life of this loop and is never
         stored: a cursor in a captured table would be restored, and a restored
-        cursor is a claim about what a transport has already forgotten."""
+        cursor is a claim about what a transport has already forgotten.
+
+        A loop that has been told to stop changes nothing on its way out. A person
+        can press Stop and then Start while this loop's long poll is still open, for
+        up to fifty seconds. The new loop is running by the time the old poll comes
+        back, and Telegram answers the older of two open polls with a conflict. So
+        every path out of a poll first asks whether this loop is still the current
+        one, and an old loop returns without writing a status, noting a backoff or
+        removing anything from ``_stops`` and ``_threads``. Those now belong to the
+        new loop."""
         adapter = self._adapters.get(kind)
         if adapter is None:
             self._set_state(channel_id, STATE_STOPPED, error=TRANSPORT_UNREACHABLE)
@@ -604,12 +641,19 @@ class ChannelService:
                 self._wait_backoff(channel_id, adapter, stop)
                 continue
             if not token:
-                self._set_state(channel_id, STATE_NO_TOKEN, error=None)
+                self._stop_and_say(channel_id, STATE_NO_TOKEN, own=stop)
                 return
             try:
                 result = adapter.poll(token, cursor, adapter.limits.max_poll_seconds)
             except ChannelAuthFailed:
-                self._token_rejected(channel_id)
+                self._stop_and_say(channel_id, STATE_TOKEN_REJECTED, own=stop)
+                return
+            except ChannelInUse:
+                # A webhook on the bot, or another program polling the same token.
+                # Retrying cannot fix it, so the loop stops and the state names it.
+                # The wording lives in the panel's status line, as it does for a
+                # rejected token, so ``error`` stays empty.
+                self._stop_and_say(channel_id, STATE_IN_USE, own=stop)
                 return
             except ChannelUnavailable:
                 self._wait_backoff(channel_id, adapter, stop)
@@ -620,12 +664,14 @@ class ChannelService:
                 # try again, and never a stack trace anywhere near a person.
                 self._wait_backoff(channel_id, adapter, stop)
                 continue
-            adapter.backoff.note_success()
             if stop.is_set():
                 # Switched off while the poll was open. Nothing is handed on and
                 # the cursor is NOT advanced, so whatever arrived is still waiting
-                # at the transport if the person switches back on.
+                # at the transport if the person switches back on. The backoff is
+                # left alone as well, because the adapter's backoff is shared with
+                # whichever loop is running now.
                 return
+            adapter.backoff.note_success()
             for message in result.messages:
                 self._hand_off(channel_id, message)
             cursor = result.next_cursor
@@ -653,6 +699,10 @@ class ChannelService:
                     "senderId": message.sender_id,
                     "senderLabel": clean_untrusted_text(message.sender_label, MAX_LABEL_CHARS),
                     "text": message.text,
+                    # The person opened the chat through a start link or the Start
+                    # button, and ``text`` is only what the link carried. The turn
+                    # uses this to tell an empty start apart from a wrong code.
+                    "isStart": message.is_start,
                     "receivedAt": int(time.time()),
                     "sentAt": message.sent_at,
                     # KINDS ONLY, never the matched text (screening.py's rule): a
@@ -667,29 +717,58 @@ class ChannelService:
     # --- status bookkeeping --------------------------------------------------
 
     def _wait_backoff(self, channel_id: str, adapter: ChannelAdapter, stop: threading.Event) -> None:
-        """Record an outage, tell the desk, and wait — on the STOP EVENT, so
-        switching the channel off during a backoff is instant rather than a wait for
-        a delay to expire."""
+        """Record an outage, tell the desk, and wait on the stop event. Waiting on
+        the event makes switching the channel off during a backoff instant, instead
+        of a wait for the delay to run out.
+
+        A loop that is no longer the current one records nothing and returns at
+        once. Its failure is about a poll nobody is waiting for, and the backoff
+        and the status it would write belong to the loop that replaced it."""
+        if not self._is_current(channel_id, stop):
+            return
         delay = adapter.backoff.note_failure()
         self._set_state(channel_id, STATE_BACKING_OFF, error=TRANSPORT_UNREACHABLE)
         stop.wait(delay)
 
-    def _token_rejected(self, channel_id: str) -> None:
-        """The transport refused the credential. The loop STOPS and says so — the
-        only thing that fixes a rejected token is a person pasting a new one, and
-        retrying one in a loop is how an account gets locked.
+    def _is_current(self, channel_id: str, stop: threading.Event) -> bool:
+        """Whether ``stop`` is the event of the loop the service currently holds for
+        this channel.
 
-        THE EVENT IS SET, not merely dropped, because this is reached from BOTH
-        threads: the poll loop learns from its own poll (and is about to return
-        anyway), and the SEND side learns from the worker while the loop is parked in
-        a fifty-second long poll. Forgetting the event there would leave a thread
-        polling on behalf of a channel that every surface now reports as stopped."""
+        Every path that ends a loop removes its event from ``_stops`` before setting
+        it (``stop`` and :meth:`_stop_and_say`), so the map is the authority. Asking
+        the map rather than ``stop.is_set()`` also covers the instant between the
+        removal and the set."""
         with self._lock:
+            return self._stops.get(channel_id) is stop
+
+    def _stop_and_say(
+        self, channel_id: str, state: str, *, own: threading.Event | None
+    ) -> None:
+        """Stop listening on one channel and record why, in one of the states that
+        mean a person has to change something first: ``token_rejected``,
+        ``in_use`` and ``no_token``. None of them is retried, because retrying a
+        rejected token is how an account gets locked and retrying the other two
+        changes nothing.
+
+        ``own`` is the stop event of the poll loop making the call. A loop may only
+        end itself. When the service holds a different event for this channel, or
+        none, a person stopped this loop while its poll was open and may already
+        have started another, so the call returns without touching the status or
+        the maps.
+
+        ``own`` is None when the send side calls, on the worker thread, after a
+        rejected token. That call has no loop of its own and stops whichever loop is
+        running. The event is set rather than merely dropped because that loop may
+        be parked in a fifty-second long poll, and forgetting the event would leave
+        a thread polling for a channel that every surface reports as stopped."""
+        with self._lock:
+            if own is not None and self._stops.get(channel_id) is not own:
+                return
             stop = self._stops.pop(channel_id, None)
             self._threads.pop(channel_id, None)
         if stop is not None:
             stop.set()
-        self._set_state(channel_id, STATE_TOKEN_REJECTED, error=None)
+        self._set_state(channel_id, state, error=None)
 
     def _fail(self, channel_id: str, sentence: str) -> None:
         """One plain sentence onto the status line, without changing what the loop

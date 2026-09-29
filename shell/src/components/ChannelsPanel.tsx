@@ -39,9 +39,10 @@
 // SkillsSection / McpServersPanel idiom) rather than a browser confirm(). Revoking a
 // paired phone is the same shape, for the same reason.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ChannelsCardState } from "../hooks/useChannels";
-import type { Channel, ChannelStatus } from "../types/ui";
+import type { Channel, ChannelPairingWindow, ChannelStatus } from "../types/ui";
+import { PairingQr, pairingQrModules } from "./PairingQr";
 import { RowAction, SurfaceRow } from "./Surface";
 
 // --- Frozen plain-language copy ---------------------------------------------
@@ -66,10 +67,10 @@ export const WHAT_IT_WILL_DO =
   "the maths. Anything that changes a file, runs a command, or touches your computer " +
   "waits until you're back — Addison says so, and leaves the request here.";
 
-/** Under the token field. Says where the token goes, in the words the API-keys
- * section already uses for the same journey. */
+/** Under the token field. Says where the token goes, as the API-keys section does
+ * for a key. */
 const TOKEN_HINT =
-  "The token goes straight to your computer's keychain and is never shown again — not even here.";
+  "The token is saved in your computer's keychain, and Addison never shows it again.";
 
 /** Shown ONLY when more than one connection of this transport is saved, because
  * that is when it becomes true and load-bearing: the keychain account is
@@ -79,20 +80,26 @@ const SHARED_TOKEN_NOTE = (label: string) =>
   `All ${label} connections on this computer share one saved token, so this replaces it ` +
   `for the others too.`;
 
-/** Beside the pairing code. One sentence about what pairing MEANS — not about how
- * it works, and never the word "nonce". */
-const PAIRING_EXPLAINER =
-  "Send this code to your bot from the phone you want to use. Only that phone will " +
-  "be able to message Addison, and you can undo it here at any time.";
+/** What pairing allows, said once under whichever pairing layout is on screen.
+ * Pairing binds a Telegram ACCOUNT, which covers every device signed in to it, so the
+ * sentence names the account rather than a phone. */
+const PAIRING_SCOPE =
+  "Only your Telegram account can message Addison, and you can undo this here.";
 
-/** Over the pending block. Says what these are and, in the same breath, what the
- * button under them does — because "Ask this here" would otherwise read as "do it
- * now", which is exactly what it is not. */
+/** Under the QR code, when the core sent a start link. */
+export const PAIRING_SCAN_HINT =
+  `Scan this with your phone's camera, then tap Start in Telegram. ${PAIRING_SCOPE}`;
+
+/** Under the large code, when there is no start link to draw. */
+export const PAIRING_CODE_HINT = `Send this code to your bot in Telegram. ${PAIRING_SCOPE}`;
+
+/** Over the pending block. It says what these are and what "Ask this here" does,
+ * because the button would otherwise read as "do it now". */
 const PENDING_HEADING = "Waiting for you";
 const PENDING_EXPLAINER =
-  "Your phone asked for these, and Addison left them here rather than doing them " +
-  "while you were away. “Ask this here” puts the message in the box on the " +
-  "chat screen — you send it yourself, and Addison asks before it does anything.";
+  "Your phone asked for these while you were away, and Addison left them here. " +
+  "“Ask this here” puts the message in the chat box for you to send yourself, and " +
+  "Addison asks before it does anything.";
 
 const ASK_HERE_ACTION = "Ask this here";
 const DISMISS_ACTION = "Dismiss";
@@ -150,7 +157,7 @@ export function statusLine(status: ChannelStatus | undefined): string {
   switch (status.state) {
     case "listening":
       return status.backoffSeconds > 0
-        ? "Listening again shortly — Telegram isn't answering."
+        ? "Telegram isn't answering, so Addison will listen again shortly."
         : "Listening for messages from your phone.";
     case "backing_off":
       return "Telegram isn't answering. Addison is still trying.";
@@ -158,9 +165,65 @@ export function statusLine(status: ChannelStatus | undefined): string {
       return "Telegram refused the saved token, so Addison stopped listening.";
     case "no_token":
       return "No token saved, so there is nothing to listen with.";
+    case "in_use":
+      // The core sends no `error` with this state, so this is the only place the
+      // person reads what happened and what to do about it.
+      return (
+        "Another program is using this bot, so Addison stopped listening. Make a new " +
+        "bot for Addison with BotFather, or turn the other program off."
+      );
     default:
       return "Not listening.";
   }
+}
+
+/** The open pairing window. With a start link it shows the QR code, the link as
+ * text, and the code as a fallback. Without one, or when the link cannot be drawn,
+ * it shows the large code on its own.
+ *
+ * The link is selectable text and never an anchor. The webview does not open URLs
+ * (see `GOOGLE_KEY_URL_TEXT` in SettingsPage.tsx), so someone with Telegram on this
+ * computer copies it into their own browser. */
+function PairingBlock({
+  pairing,
+  busy,
+  onCancel,
+}: {
+  pairing: ChannelPairingWindow;
+  busy: boolean;
+  onCancel: () => void;
+}) {
+  const { link, code } = pairing;
+  const modules = useMemo(() => (link ? pairingQrModules(link) : null), [link]);
+  const cancel = (
+    <div className="flex items-baseline gap-5">
+      <RowAction tone="muted" onClick={onCancel} disabled={busy}>
+        Cancel pairing
+      </RowAction>
+    </div>
+  );
+
+  if (link && modules) {
+    return (
+      <div className="mt-2.5 flex flex-col gap-2">
+        <PairingQr modules={modules} />
+        <p className="m-0 text-[12px] leading-[1.55] text-muted">{PAIRING_SCAN_HINT}</p>
+        <p className="m-0 select-all break-all font-mono text-[11px] text-ink">{link}</p>
+        <p className="m-0 text-[12px] leading-[1.55] text-muted">
+          Or send the code <span className="font-mono text-ink">{code}</span> to your bot.
+        </p>
+        {cancel}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2.5 flex flex-col gap-2">
+      <p className="m-0 font-mono text-[18px] tracking-[0.2em] text-ink">{code}</p>
+      <p className="m-0 text-[12px] leading-[1.55] text-muted">{PAIRING_CODE_HINT}</p>
+      {cancel}
+    </div>
+  );
 }
 
 function formatWhen(at?: number): string {
@@ -433,25 +496,14 @@ export function ChannelsPanel({
                 </div>
               )}
 
-              {/* Pairing: the code is shown HERE and typed on the phone. */}
+              {/* Pairing: the code, and the QR code of the start link when there is
+                  one, are shown HERE and the phone sends the code back. */}
               {pairingHere ? (
-                <div className="mt-2.5 flex flex-col gap-2">
-                  <p className="m-0 font-mono text-[18px] tracking-[0.2em] text-ink">
-                    {pairingHere.code}
-                  </p>
-                  <p className="m-0 text-[12px] leading-[1.55] text-muted">
-                    {PAIRING_EXPLAINER}
-                  </p>
-                  <div className="flex items-baseline gap-5">
-                    <RowAction
-                      tone="muted"
-                      onClick={() => void handleCancelPairing(channel)}
-                      disabled={busy}
-                    >
-                      Cancel pairing
-                    </RowAction>
-                  </div>
-                </div>
+                <PairingBlock
+                  pairing={pairingHere}
+                  busy={busy}
+                  onCancel={() => void handleCancelPairing(channel)}
+                />
               ) : (
                 <div className="mt-2.5 flex items-baseline gap-5">
                   <RowAction

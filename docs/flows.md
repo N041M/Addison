@@ -801,7 +801,7 @@ sequenceDiagram
     participant ST as Store
     participant WV as Webview (Settings)
 
-    Note over CS: started ONLY by channel.setEnabled — a person's switch.<br/>Nothing starts a loop when the app opens.
+    Note over CS: started by channel.setEnabled or channel.beginPairing, both a person's act.<br/>Nothing starts a loop when the app opens.
     CS->>SH: keychain.getChannelKey {kind}
     Note over SH,CS: G1: read at the moment of use, held for one request,<br/>never stored, never logged, never in an exception
     SH-->>CS: token

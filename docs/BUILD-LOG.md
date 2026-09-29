@@ -12,6 +12,107 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-29: pairing by QR code, and a stopped state for a bot another program reads
+
+[`messaging-channel-plan.md`](plans/messaging-channel-plan.md) §3.13 owns the design. This
+entry records why the change was made and what its mutation pass found.
+
+The owner connected a bot, switched it on, and no phone ever paired. Reading the code
+found four ways the flow failed with no message to the person.
+
+1. Nothing starts a poll loop when the app opens. After a restart the row said the
+   channel was on, no loop ran, and "Pair a phone" minted a code that nothing was
+   listening for.
+2. Telegram sends `/start` the first time anybody opens a bot. The turn offered it as
+   a code, so it spent one of the window's three attempts.
+3. A failed attempt is answered with silence. That is a deliberate owner decision,
+   because a reply tells a stranger the bot is live, and it stays. The other fixes make
+   a failed attempt much less likely.
+4. When a webhook is set on the bot or another program polls the same token, Telegram
+   answers `getUpdates` with 409. The adapter raised a refusal, the poll loop caught it
+   as an unknown error, and it backed off forever with "Telegram isn't answering" while
+   "Check now" kept succeeding.
+
+What shipped, on the core side:
+
+- The Telegram adapter translates the start command. `/start`, `/start <payload>` and
+  `/start@<bot> <payload>` arrive as an `InboundMessage` with `is_start` set and `text`
+  holding only the payload. Nothing above `channels/telegram.py` knows how Telegram
+  spells it.
+- `VerifiedIdentity.handle` carries the bot's username when it has a username's shape,
+  and `ChannelAdapter.pairing_link` builds `https://t.me/<bot>?start=<code>` from a
+  valid handle and a valid code. The desktop shows the link as a QR code. The link
+  contains the pairing code, so it follows the code's rules and appears only in the
+  `channel.beginPairing` response.
+- "Pair a phone" asks Telegram who the token belongs to, records the answer as "Check
+  now" does, starts listening through the switch's own checks when nothing is
+  listening, and returns the link beside the code. The checks moved into one helper,
+  `_start_listening`, which `channel.setEnabled` and `channel.beginPairing` both call.
+  When nobody has ever checked the token and the check "Pair a phone" makes fails,
+  the answer is "Addison couldn't check that connection just now" rather than the
+  switch's "Press Check now, then switch it on".
+- Only text that could be a code spends a pairing attempt. `channel_pairing.offer`
+  answers `WRONG` with the budget untouched when the normalised text is not six
+  characters from the code alphabet (`automation_nonce.could_be_code`). Such text can
+  never match, because `matches` compares normalised strings, so every possible guess
+  still costs one. Ordinary chat, a bare Start and the backlog Telegram hands over
+  when "Pair a phone" starts a stopped loop no longer use the window up. Only
+  `channel_pairing.py` calls the predicate, so the arming ceremony's budget is
+  unchanged.
+- A start carrying a code is offered exactly as a typed code is. A phone that is
+  already paired and opens the bot again gets the paired sentence and runs no model
+  turn. When it carries the live code, the window closes and the desk hears
+  `paired`. That check is `channel_pairing.confirms`, which spends no attempt.
+- A 409 raises `ChannelInUse`, a subclass of `ChannelRefused`. The poll loop stops on
+  it and the state becomes `in_use` with no error, which is how `token_rejected` is
+  reported. On the send side it is still one undelivered message.
+- A loop that a person stopped while its long poll was open now changes nothing on its
+  way out. Every exit from the loop asks whether the service still holds this loop's
+  stop event, and an old loop returns without writing a status, touching the shared
+  backoff or removing the new loop from `_stops` and `_threads`. Telegram answers the
+  older of two open polls with a 409, so a quick Stop and Start produces this case
+  every time. Without the rule, the new `in_use` branch would have stopped the new
+  loop, and the old code's backoff branch wrote "backing off" over the new loop's
+  status.
+
+What the build and its mutation pass found:
+
+- Fifty-one mutations were applied in a scratch copy, one per new or moved line, and
+  each turned its test red for the intended reason. None survived. One of them is
+  guarded by a test that already existed: moving the shape check above the compare
+  refuses the right code in fixtures whose code was never minted, and
+  `test_the_right_code_matches_however_it_was_typed` goes red.
+- The first round had a separate branch in the turn that counted a bare Start from a
+  stranger and returned without offering it. Once `offer` spent nothing on text that
+  cannot be a code, removing that branch no longer turned any test red, because the
+  general rule already did its job. The branch was deleted, and the bare-start test
+  is now held by the rule in `offer`.
+- The first draft of "Pair a phone" would have made a real network request from the
+  test suite. Two existing tests build a server with no keychain bridge, so the token
+  read returned an empty string, and `getMe` went to `api.telegram.org` with it.
+  `ChannelService.verify` now raises before any request when there is no token. A test
+  pins it.
+- An old loop whose poll succeeded after a Stop reset the shared backoff before it
+  noticed it had been stopped, and `channel.status` reads that backoff for the new
+  loop. The stop check now comes first.
+- The send side's token rejection is the one path that must keep stopping whichever
+  loop is running, because it has no loop of its own. A mutation that applied the
+  current-loop rule to it as well left the loop running on a rejected token, and a
+  test now holds that path.
+- The race test first read the thread map after the old loop had already replaced
+  itself, so it asserted against the new loop and waited ten seconds for nothing. The
+  harness now holds the old poll until the test has recorded which thread is old.
+- One existing test asserted that a wrong code produced no request at all. That stopped
+  being the right claim once pairing checks the token and starts the loop, so it now
+  asserts that nothing reaches a phone.
+
+- The paired sentence had an em-dash tail and now reads as three sentences. No test
+  pinned its words, because every test imports the constant.
+
+Two things stay open, and [`KNOWN-GAPS.md`](KNOWN-GAPS.md) holds both. Opening the app
+still does not start listening. A wrong code-shaped message that waited at Telegram
+before a window opened can still spend one of its attempts.
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner

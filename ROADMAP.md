@@ -147,8 +147,9 @@ non-match is met with silence), the remote turn in a conversation of its own
 pairing and Revoke in plain words. Owner decision 8 ships as its DEFAULT only —
 messages that arrived while the Mac slept are declined with one sentence; the
 queue-or-decline setting itself is later. One channel listens at a time (decision
-11), and nothing starts listening when the app opens: switching one on is what
-starts it, so `channel.status` is where a surface learns the truth.
+11), and nothing starts listening when the app opens. Switching one on starts it, and
+since 2026-09-29 so does "Pair a phone", so `channel.status` is where a surface learns
+the truth.
 
 **Phase 3 landed the same day, and with it the whole of what this plan schedules:
 the remote floor and the desk queue.** `REMOTE_TOOL_IDS` now carries three read-only
@@ -166,6 +167,15 @@ live with the ordinary card. Owner decision 8's SETTING landed here too
 still the default, or answer it late — choosing the wider one is Developer-only.
 **Phase 4 — approving an action from a phone — stays deferred**, the owner's horizon
 for that being a bespoke phone app.
+
+**Built 2026-09-29: pairing by QR code.** "Pair a phone" shows a QR code of the bot's
+Telegram start link beside the code, so a person scans it and taps Start instead of
+typing. The same press switches listening on when it was off, which closes the case
+where a restart left a code with nothing listening for it. Only a message that could
+be the code spends a pairing attempt, so opening the bot and ordinary chat no longer
+use the window up. A bot that another program is already reading now stops with a
+status that says so instead of retrying forever.
+The manual pass with a real bot is still owed.
 
 **Built 2026-08-24: phase 1 of Knowledge — the index, and nothing retrieves.**
 Addison can be given a document, chop it into passages, screen each one for writing

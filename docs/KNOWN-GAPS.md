@@ -1260,6 +1260,29 @@ follows. None is scheduled and none blocks anything.
     off the ids it loaded and leaves the newer remote rows behind. Nothing is lost or
     corrupted, and the honest fix is either a re-read on `channel.remoteTurn` or
     refusing to load a live channel's conversation — neither is built.
+  - **STILL OPEN, and narrower since 2026-09-29: opening the app does not start
+    listening.** `channels.enabled` records that the person switched a channel on, and
+    nothing starts a poll loop at launch, so after a restart a paired phone gets no
+    answer until somebody at the desk presses the switch or "Pair a phone". The case
+    that failed silently for the owner is closed. "Pair a phone" now starts listening
+    through the switch's own checks, so a code is never shown with nothing listening
+    for it. What is left is a paired phone after a restart, and the panel shows that
+    channel as stopped. Phase 2 decided that only a person's act starts a loop
+    ([`messaging-channel-plan.md`](plans/messaging-channel-plan.md) §3.10), so starting
+    one at launch from the saved switch is an owner question rather than a fix.
+  - **STILL OPEN since 2026-09-29, and small: an old wrong code waiting at Telegram
+    can spend a fresh window's attempts.** When "Pair a phone" starts a loop that was
+    not running, the first poll returns everything Telegram held for the bot, up to a
+    day of it, and those messages are handled after the window opens. Only text that
+    could be a code spends an attempt (`channel_pairing.offer`, via
+    `automation_nonce.could_be_code`), so ordinary chat and a bare Start in that
+    backlog cost nothing. What is left is a wrong code-shaped message, such as the
+    code from an earlier window that the person typed while nothing was listening.
+    Three of those close the new window before the person scans, and the scan then
+    fails in silence. Skipping any message whose transport timestamp is older than
+    the window would close it, because such a message cannot carry a code that did not
+    exist yet. That makes `InboundMessage.sent_at` an input to pairing, which its
+    docstring rules out, so it waits for an owner decision.
 
 **Opened by the Windows port (phase 1 built 2026-08-23;
 [windows-port-plan.md](plans/windows-port-plan.md) owns the subject, the three owner

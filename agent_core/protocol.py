@@ -421,18 +421,30 @@ class Method:
     CHANNEL_CONNECT = "channel.connect"        # {id} -> {ok, connectedAs} | {ok:false, error}
     CHANNEL_SET_ENABLED = "channel.setEnabled"  # {id, enabled} -> {ok} | {ok:false, error}
     # {id} -> {state, connectedAs?, lastPollAt?, backoffSeconds, unknownSenders, error?}
-    # `state` is a CLOSED vocabulary (channel_service.py): "stopped" | "listening" |
-    # "backing_off" | "token_rejected" | "no_token". `unknownSenders` is the count of
-    # messages from senders that are not paired — the ONLY thing an unpaired message
-    # produces, because a reply is an oracle. `error` is one of Addison's own frozen
-    # sentences and NEVER a transport's error text.
+    # `state` is a closed vocabulary owned by channel_service.py. The values are
+    # "stopped", "listening", "backing_off", "token_rejected", "no_token" and
+    # "in_use". "in_use" means another program is reading the bot's messages (on
+    # Telegram, a webhook or a second program polling the same token), so the loop
+    # stopped. It is sent with no `error`, like "token_rejected", and the panel's
+    # status line says it. `unknownSenders` counts messages from senders that are not
+    # paired. It is the only thing an unpaired message produces, because a reply
+    # would tell a stranger the bot is live. `error` is one of Addison's own frozen
+    # sentences and never a transport's error text.
     CHANNEL_STATUS = "channel.status"
     # Pairing: the desktop shows a code, the phone sends it. The code is minted at
     # the moment of asking (agent_core/channel_pairing.py, over automation_nonce), so
     # no observed content could have written it down in advance. The window lives in
     # memory on the service and is gone on restart — a pairing window is a moment,
     # not a setting.
-    CHANNEL_BEGIN_PAIRING = "channel.beginPairing"    # {id} -> {ok, code, expiresAt}
+    #
+    # beginPairing also starts listening when the channel is not listening, through
+    # the same checks as setEnabled {enabled: true}, and a refusal from those checks
+    # comes back as {ok: false, error} with no window opened. `link` is the
+    # transport's start link carrying the code (https://t.me/<bot>?start=<code>),
+    # which the desktop shows as a QR code. It is present only when the bot's handle
+    # was learned in the same call. It contains the code, so it is never persisted
+    # or logged and appears only in this response.
+    CHANNEL_BEGIN_PAIRING = "channel.beginPairing"  # {id} -> {ok, code, expiresAt, link?}
     CHANNEL_CANCEL_PAIRING = "channel.cancelPairing"  # {id} -> {ok}
     CHANNEL_PAIRINGS = "channel.pairings"             # {id} -> {pairings: [<pairing>]}
     # <pairing> = {id, label, pairedAt}. The transport's own id for the human is

@@ -1979,20 +1979,40 @@ function parseChannelConnect(result: unknown): ChannelConnectResult {
   };
 }
 
-/** `channel.beginPairing` → {ok, code, expiresAt} | {ok:false, error}. */
+/** `channel.beginPairing` → {ok, code, expiresAt, link?} | {ok:false, error}. */
 export interface ChannelPairingResult {
   ok: boolean;
   code?: string;
   expiresAt?: number;
+  /** The Telegram start link that carries the code, drawn as a QR code on the
+   * panel. Absent when the core could not learn the bot's name. */
+  link?: string;
   error?: string;
 }
 
-function parseChannelPairingStart(result: unknown): ChannelPairingResult {
+/** The longest start link the panel will draw. A real one is well under 100
+ * characters, since a bot name is at most 32 and the code is 7. */
+const PAIRING_LINK_MAX_CHARS = 512;
+const HTTPS = "https://";
+
+/** Keep the start link only when it is an `https://` address with something after
+ * the scheme and no longer than `PAIRING_LINK_MAX_CHARS`. Anything else is dropped,
+ * and the panel shows the code on its own. The link becomes a QR code that a phone
+ * opens, so an address in any other scheme must never reach the screen. */
+function parsePairingLink(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  if (!value.startsWith(HTTPS) || value.length <= HTTPS.length) return undefined;
+  if (value.length > PAIRING_LINK_MAX_CHARS) return undefined;
+  return value;
+}
+
+export function parseChannelPairingStart(result: unknown): ChannelPairingResult {
   const obj = asRecord(result);
   return {
     ok: obj?.ok === true,
     code: typeof obj?.code === "string" ? obj.code : undefined,
     expiresAt: typeof obj?.expiresAt === "number" ? obj.expiresAt : undefined,
+    link: parsePairingLink(obj?.link),
     error: typeof obj?.error === "string" ? obj.error : undefined,
   };
 }
@@ -2007,6 +2027,7 @@ const CHANNEL_STATES = new Set<string>([
   "backing_off",
   "token_rejected",
   "no_token",
+  "in_use",
 ]);
 
 /** Parse `channel.status`. Junk degrades to "stopped, nothing known". */

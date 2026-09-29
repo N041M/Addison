@@ -7,8 +7,8 @@
 //       "stopped", never towards "listening".
 //   (b) The panel, rendered for real: the PRIVACY SENTENCE byte-for-byte and FIRST,
 //       the standing list of what Addison will and will not do from a phone, the
-//       live status in plain words, the pairing code, and the paired-device list
-//       with its Revoke.
+//       live status in plain words, the pairing code and its QR code, and the
+//       paired-device list with its Revoke.
 //   (c) The DESK QUEUE, and what it deliberately is not: a note carries the person's
 //       own words and the plain name of the thing Addison would have used, "Ask this
 //       here" seeds the composer and asks the core for nothing at all, and there is
@@ -36,9 +36,16 @@ import {
   parseChannels,
   parseChannelStatus,
   parseChannelPairings,
+  parseChannelPairingStart,
   parseChannelRequests,
 } from "../ipc/client";
-import { ChannelsPanel, PRIVACY_LINE, WHAT_IT_WILL_DO } from "../components/ChannelsPanel";
+import {
+  ChannelsPanel,
+  PAIRING_CODE_HINT,
+  PAIRING_SCAN_HINT,
+  PRIVACY_LINE,
+  WHAT_IT_WILL_DO,
+} from "../components/ChannelsPanel";
 import { SettingsPage } from "../components/SettingsPage";
 import { useChannels, type ChannelsCardState } from "../hooks/useChannels";
 import type { ModelSelection } from "../hooks/useModelSelection";
@@ -65,6 +72,21 @@ const STANDING_LIST =
   "From your phone, Addison answers in words, looks things up on the web, and does " +
   "the maths. Anything that changes a file, runs a command, or touches your computer " +
   "waits until you're back — Addison says so, and leaves the request here.";
+/** Under the QR code, and under the large code when there is no link. Frozen in full
+ * for the same reason. Pairing binds a Telegram account, so neither promises that
+ * only one phone can message Addison. */
+const SCAN_HINT =
+  "Scan this with your phone's camera, then tap Start in Telegram. Only your Telegram " +
+  "account can message Addison, and you can undo this here.";
+const CODE_HINT =
+  "Send this code to your bot in Telegram. Only your Telegram account can message " +
+  "Addison, and you can undo this here.";
+/** The status line for a bot another program is using. */
+const IN_USE_LINE =
+  "Another program is using this bot, so Addison stopped listening. Make a new bot for " +
+  "Addison with BotFather, or turn the other program off.";
+/** A start link of the length a real one has. */
+const LINK = "https://t.me/addison_karel_bot?start=ABC-DEF";
 const SECTION_TITLE = "Your phone";
 const ADD_ACTION = "add a connection";
 const DEV_ONLY =
@@ -315,6 +337,7 @@ describe("the live picture", () => {
       ["token_rejected", "Telegram refused the saved token, so Addison stopped listening."],
       ["no_token", "No token saved, so there is nothing to listen with."],
       ["stopped", "Not listening."],
+      ["in_use", IN_USE_LINE],
     ];
     for (const [state, sentence] of lines) {
       render(
@@ -329,6 +352,39 @@ describe("the live picture", () => {
       expect(screen.getByText(sentence)).toBeTruthy();
       cleanup();
     }
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          statuses: { a: status({ state: "listening", backoffSeconds: 5 }) },
+        })}
+      />,
+    );
+    expect(
+      screen.getByText("Telegram isn't answering, so Addison will listen again shortly."),
+    ).toBeTruthy();
+  });
+
+  it("offers to start listening again when another program is using the bot", () => {
+    // Addison stopped listening, so the switch must point towards starting. A row
+    // that offered "Stop listening" here would be telling somebody their phone is
+    // connected while nothing is listening.
+    const handleSetEnabled = vi.fn(async () => {});
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel({ enabled: true })],
+          statuses: { a: status({ state: "in_use" }) },
+          handleSetEnabled,
+        })}
+      />,
+    );
+    expect(screen.getByText("Start listening")).toBeTruthy();
+    expect(screen.queryByText("Stop listening")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Listen to My phone"));
+    expect(handleSetEnabled).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), true);
   });
 
   it("shows the bot it is connected as, once it has asked", () => {
@@ -452,8 +508,20 @@ describe("the live picture", () => {
   });
 });
 
+/** Words a person aged 54 or 68 should never meet on the pairing block. */
+const PAIRING_JARGON = [
+  "nonce",
+  "pairing token",
+  "sender id",
+  "authorization",
+  "deep link",
+  "webhook",
+  "payload",
+  "poll",
+];
+
 describe("pairing, on screen", () => {
-  it("shows the code beside one sentence about what pairing means", () => {
+  it("shows only the large code, and one sentence, when there is no link", () => {
     render(
       <ChannelsPanel
         connected
@@ -464,17 +532,74 @@ describe("pairing, on screen", () => {
       />,
     );
     expect(screen.getByText("ABC-DEF")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Send this code to your bot from the phone you want to use. Only that phone will " +
-          "be able to message Addison, and you can undo it here at any time.",
-      ),
-    ).toBeTruthy();
-    // No jargon anywhere near it — personas 54 and 68 read this.
+    expect(screen.getByText(CODE_HINT)).toBeTruthy();
+    expect(PAIRING_CODE_HINT).toBe(CODE_HINT);
+    // No QR code, and nothing that asks the person to scan one.
+    expect(screen.queryByRole("img")).toBeNull();
     const text = (document.body.textContent ?? "").toLowerCase();
-    for (const word of ["nonce", "pairing token", "sender id", "authorization"]) {
-      expect(text).not.toContain(word);
+    expect(text).not.toContain("scan");
+    // Pairing binds a Telegram account, so the old promise about one phone is gone.
+    expect(text).not.toContain("only that phone");
+    for (const word of PAIRING_JARGON) expect(text).not.toContain(word);
+  });
+
+  it("shows the QR code, the link as text and the code as a fallback when there is a link", () => {
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          pairing: { channelId: "a", code: "ABC-DEF", expiresAt: 999, link: LINK },
+        })}
+      />,
+    );
+    const qr = screen.getByRole("img", { name: "QR code for pairing your phone" });
+    expect(screen.getByText(SCAN_HINT)).toBeTruthy();
+    expect(PAIRING_SCAN_HINT).toBe(SCAN_HINT);
+    const link = screen.getByText(LINK);
+    // Selectable text for someone with Telegram on this computer, and never an
+    // anchor, because the webview does not open addresses.
+    expect(link.className).toContain("select-all");
+    expect(document.querySelector("a")).toBeNull();
+    const fallback = screen.getByText(
+      (_, element) => element?.textContent === "Or send the code ABC-DEF to your bot.",
+    );
+    // In that order: the code to scan, what to do, the link, the fallback, the way out.
+    const cancel = screen.getByText("Cancel pairing");
+    const order = [qr, screen.getByText(SCAN_HINT), link, fallback, cancel];
+    for (let i = 1; i < order.length; i++) {
+      expect(
+        order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
     }
+    // The large code and its sentence belong to the layout without a link.
+    expect(screen.queryByText(CODE_HINT)).toBeNull();
+    const text = (document.body.textContent ?? "").toLowerCase();
+    expect(text).not.toContain("only that phone");
+    for (const word of PAIRING_JARGON) expect(text).not.toContain(word);
+  });
+
+  it("falls back to the code when the link cannot be drawn", () => {
+    // Too long for any QR code. The parser drops a link this long, and the panel
+    // does not rely on that.
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          pairing: {
+            channelId: "a",
+            code: "ABC-DEF",
+            expiresAt: 999,
+            link: `https://t.me/${"a".repeat(3000)}`,
+          },
+        })}
+      />,
+    );
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByText("ABC-DEF")).toBeTruthy();
+    expect(screen.getByText(CODE_HINT)).toBeTruthy();
+    expect(screen.queryByText(SCAN_HINT)).toBeNull();
   });
 
   it("asks for a code, and can close the window again", () => {
@@ -537,6 +662,50 @@ describe("parseChannelStatus / parseChannelPairings", () => {
       expect(parseChannelStatus(junk).state).toBe("stopped");
     }
     expect(parseChannelStatus({ state: "listening" }).state).toBe("listening");
+  });
+
+  it("knows the state for a bot another program is using", () => {
+    // Read as "stopped" it would lose the one line that tells somebody what to do.
+    expect(parseChannelStatus({ state: "in_use" }).state).toBe("in_use");
+  });
+
+  it("keeps an https start link from beginPairing", () => {
+    expect(
+      parseChannelPairingStart({ ok: true, code: "ABC-DEF", expiresAt: 9, link: LINK }),
+    ).toEqual({ ok: true, code: "ABC-DEF", expiresAt: 9, link: LINK, error: undefined });
+    // The longest link it keeps is 512 characters.
+    const longest = `https://t.me/x?start=${"A".repeat(512 - 21)}`;
+    expect(longest).toHaveLength(512);
+    expect(parseChannelPairingStart({ ok: true, code: "ABC-DEF", link: longest }).link).toBe(
+      longest,
+    );
+    // No link is the ordinary answer when the core could not learn the bot's name.
+    expect(parseChannelPairingStart({ ok: true, code: "ABC-DEF", expiresAt: 9 }).link).toBe(
+      undefined,
+    );
+  });
+
+  it("drops a start link that is not https, is empty, or is too long", () => {
+    // The link is drawn as a QR code that a phone opens, so only an https address
+    // of a sane length reaches the screen. The code still does.
+    const refused: unknown[] = [
+      "http://t.me/addison_karel_bot?start=ABC-DEF",
+      "tg://resolve?domain=addison_karel_bot&start=ABC-DEF",
+      "javascript:alert(1)",
+      " https://t.me/addison_karel_bot?start=ABC-DEF",
+      "HTTPS://t.me/addison_karel_bot?start=ABC-DEF",
+      "https://",
+      "",
+      `https://t.me/x?start=${"A".repeat(513 - 21)}`,
+      42,
+      null,
+      { href: LINK },
+    ];
+    for (const link of refused) {
+      const parsed = parseChannelPairingStart({ ok: true, code: "ABC-DEF", expiresAt: 9, link });
+      expect(parsed.link, `kept ${JSON.stringify(link)}`).toBeUndefined();
+      expect(parsed.code).toBe("ABC-DEF");
+    }
   });
 
   it("degrades counts and sentences without throwing", () => {
@@ -1027,6 +1196,103 @@ describe("useChannels (real hook, mocked ipc)", () => {
     });
     expect(result.current.pairing).toBeNull();
     expect(ipc.cancelChannelPairing).toHaveBeenCalledWith("a");
+  });
+
+  it("carries the start link into the pairing window", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.beginChannelPairing as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true,
+      code: "ABC-DEF",
+      expiresAt: 9,
+      link: LINK,
+    });
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleBeginPairing(channel());
+    });
+    expect(result.current.pairing).toEqual({
+      channelId: "a",
+      code: "ABC-DEF",
+      expiresAt: 9,
+      link: LINK,
+    });
+  });
+
+  it("re-reads the status after asking for a code, because asking starts listening", async () => {
+    const { ipc } = await import("../ipc/client");
+    const list = ipc.listChannels as ReturnType<typeof vi.fn>;
+    // Nothing on the list at mount, so mounting asks for no status and any status
+    // call below comes from asking for the code.
+    list.mockResolvedValueOnce([]);
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await waitFor(() => expect(ipc.listChannels).toHaveBeenCalled());
+    await act(async () => {});
+    expect(ipc.channelStatus).not.toHaveBeenCalled();
+    list.mockResolvedValueOnce([channel()]);
+    await act(async () => {
+      await result.current.handleBeginPairing(channel());
+    });
+    await waitFor(() => expect(ipc.channelStatus).toHaveBeenCalledWith("a"));
+  });
+
+  it("re-reads the saved row after asking for a code, whether it worked or was refused", async () => {
+    // Asking for a code checks the token and may switch listening on, and the core
+    // records both on the saved row. Without a re-read, the line under the QR code
+    // would still say Addison hasn't checked the token.
+    const { ipc } = await import("../ipc/client");
+    const list = ipc.listChannels as ReturnType<typeof vi.fn>;
+    list.mockResolvedValueOnce([channel()]);
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await waitFor(() => expect(result.current.channels[0]?.tokenPresent).toBe("unknown"));
+
+    list.mockResolvedValueOnce([channel({ tokenPresent: "present", enabled: true })]);
+    await act(async () => {
+      await result.current.handleBeginPairing(channel());
+    });
+    await waitFor(() => expect(result.current.channels[0]?.tokenPresent).toBe("present"));
+    expect(result.current.channels[0]?.enabled).toBe(true);
+    expect(result.current.pairing?.code).toBe("ABC-DEF");
+
+    // A refused token is recorded on the row too, and the refusal is the core's own
+    // sentence with no pairing window opened.
+    await act(async () => {
+      await result.current.handleCancelPairing(channel());
+    });
+    const refusal = "Telegram refused the saved token.";
+    (ipc.beginChannelPairing as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      error: refusal,
+    });
+    list.mockResolvedValueOnce([channel({ tokenPresent: "absent" })]);
+    await act(async () => {
+      await result.current.handleBeginPairing(channel());
+    });
+    await waitFor(() => expect(result.current.channels[0]?.tokenPresent).toBe("absent"));
+    expect(result.current.error).toBe(refusal);
+    expect(result.current.pairing).toBeNull();
+  });
+
+  it("closes the pairing window when a phone pairs on that connection", async () => {
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleBeginPairing(channel());
+    });
+    expect(result.current.pairing?.code).toBe("ABC-DEF");
+    // A finished turn and a pairing on another connection leave it open.
+    act(() => {
+      for (const handler of notificationHandlers) handler({ id: "a", phase: "answered" });
+    });
+    expect(result.current.pairing?.code).toBe("ABC-DEF");
+    act(() => {
+      for (const handler of notificationHandlers) handler({ id: "b", phase: "paired" });
+    });
+    expect(result.current.pairing?.code).toBe("ABC-DEF");
+    // The core closed the window when the phone paired, so the code and its QR code
+    // go too. Left up, they would invite a second scan that nothing answers.
+    act(() => {
+      for (const handler of notificationHandlers) handler({ id: "a", phase: "paired" });
+    });
+    expect(result.current.pairing).toBeNull();
   });
 
   it("reads the desk queue on mount and again when the core says one arrived", async () => {

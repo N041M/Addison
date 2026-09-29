@@ -36,6 +36,16 @@ What they hold:
  (12) Owner decision 8's SETTING: decline by default, answer late messages if the
       person says so — a widening, so choosing it is Developer-only while choosing
       the safe direction answers in every profile. Captured, and restored.
+ (13) Start links (2026-09-29). A bare start from a stranger spends no attempt and
+      says nothing. A start carrying a code is offered exactly as a typed code. A
+      paired phone that opens the bot again gets the paired sentence and runs no
+      turn, and closes a window whose code it carries. The profile check, the
+      late-message check and the guard answer a start the way they answer any
+      message.
+ (14) A bot another program is reading. Telegram's 409 stops the loop in the state
+      ``in_use`` instead of backing off forever, a 409 on a send is one undelivered
+      message, and a loop that was stopped and replaced while its poll was open
+      changes nothing on its way out.
 
 Every test here was mutation-proven; the mutations are named in the docstrings.
 """
@@ -43,6 +53,7 @@ Every test here was mutation-proven; the mutations are named in the docstrings.
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 import urllib.parse
 
@@ -53,9 +64,22 @@ from agent_core.channel_service import (
     CONTINUATION_MARKER,
     MAX_PENDING_REQUESTS,
     PENDING_REQUEST_MAX_AGE_SECONDS,
+    ChannelService,
     split_message,
 )
-from agent_core.channels.adapter import InboundMessage
+from agent_core.channels.adapter import (
+    CHANNEL_IN_USE,
+    SEND_REFUSED,
+    TOKEN_REJECTED,
+    TRANSPORT_UNREACHABLE,
+    Backoff,
+    ChannelAuthFailed,
+    ChannelInUse,
+    ChannelLimits,
+    ChannelUnavailable,
+    InboundMessage,
+    PollResult,
+)
 from agent_core.channels.telegram import TelegramAdapter
 from agent_core.main import build_registry
 from agent_core.profiles import DEVELOPER
@@ -67,11 +91,19 @@ from agent_core.rpc.channels import (
     _PAIRED,
     _REMOTE_CONVERSATION_TITLE,
 )
-from agent_core.screening import UNTRUSTED_MARKER
+from agent_core.screening import UNTRUSTED_MARKER, screen
 from agent_core.tools.registry import REMOTE_REFUSAL
 from tests.conftest import ShellBridgeStubs, _shutdown, build_server
 
 _TOKEN = "123456:FAKE-BOT-TOKEN"
+
+#: Telegram's own words for a conflict. A test that sees them anywhere Addison
+#: writes has found a transport's text on a person's screen.
+_CONFLICT = {
+    "ok": False,
+    "error_code": 409,
+    "description": "Conflict: terminated by other getUpdates request",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +120,17 @@ class _Telegram:
     def __init__(self) -> None:
         self.requests: list[tuple[str, dict]] = []
         self.pending_updates: list[dict] = []
+        # A test may add an update while the loop's thread is taking the batch.
+        self._updates_lock = threading.Lock()
         self.fail_next_poll = False
+        #: What ``getMe`` reports as the bot's username.
+        self.username: object = "addison_bot"
+        #: HTTP statuses a test can change to make one method fail. 409 is what
+        #: Telegram answers ``getUpdates`` with when a webhook is set or a second
+        #: program is polling the same token.
+        self.get_me_status = 200
+        self.updates_status = 200
+        self.send_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -97,15 +139,23 @@ class _Telegram:
         self.requests.append((method, params))
         assert path.startswith(f"/bot{_TOKEN}/"), "the token rides Telegram's URL and only there"
         if method == "getMe":
-            return httpx.Response(200, json={"ok": True, "result": {"username": "addison_bot"}})
+            if self.get_me_status != 200:
+                return httpx.Response(self.get_me_status, json={"ok": False})
+            return httpx.Response(200, json={"ok": True, "result": {"username": self.username}})
         if method == "getUpdates":
             if self.fail_next_poll:
                 self.fail_next_poll = False
                 return httpx.Response(502, json={"ok": False})
-            batch, self.pending_updates = self.pending_updates, []
+            if self.updates_status != 200:
+                time.sleep(0.02)
+                return httpx.Response(self.updates_status, json=_CONFLICT)
+            with self._updates_lock:
+                batch, self.pending_updates = self.pending_updates, []
             time.sleep(0.02)  # a poll is not a spin; keep the loop off a busy wait
             return httpx.Response(200, json={"ok": True, "result": batch})
         if method == "sendMessage":
+            if self.send_status != 200:
+                return httpx.Response(self.send_status, json=_CONFLICT)
             return httpx.Response(
                 200, json={"ok": True, "result": {"message_id": len(self.requests)}}
             )
@@ -117,7 +167,21 @@ class _Telegram:
         return [params.get("text", "") for method, params in self.requests
                 if method == "sendMessage"]
 
+    def to_a_chat(self) -> list[str]:
+        """Every request that would reach a person's phone. ``getMe`` and
+        ``getUpdates`` ask Telegram about the bot and reach nobody, which matters
+        now that "Pair a phone" checks the token and starts the loop."""
+        return [method for method, _ in self.requests
+                if method in ("sendMessage", "sendChatAction")]
+
+    def polls(self) -> int:
+        return sum(1 for method, _ in self.requests if method == "getUpdates")
+
     def update(self, *, update_id: int, text: str, sender: str = "77", sent_at: int | None = None):
+        with self._updates_lock:
+            self._append_update(update_id, text, sender, sent_at)
+
+    def _append_update(self, update_id: int, text: str, sender: str, sent_at: int | None):
         self.pending_updates.append(
             {
                 "update_id": update_id,
@@ -218,7 +282,9 @@ class _Channel:
         conn.commit()
         conn.close()
 
-    def message(self, text: str, *, sender: str = "77", sent_at: int | None = None) -> None:
+    def message(
+        self, text: str, *, sender: str = "77", sent_at: int | None = None, start: bool = False
+    ) -> None:
         """One inbound message, handed over exactly as the poll loop hands one over,
         then a wait for the worker to be free again.
 
@@ -244,6 +310,7 @@ class _Channel:
                 received_at=int(time.time()),
                 sent_at=int(time.time()) if sent_at is None else sent_at,
                 update_id="1",
+                is_start=start,
             ),
         )
         self.drain()
@@ -294,13 +361,17 @@ def test_a_wrong_pairing_code_is_silent_and_spends_the_attempt(tmp_path):
     something would be most tempting: the person is expecting a reply. They get one
     only if the code is right.
 
-    Mutation: send "that code isn't right" on a WRONG outcome — this fails."""
+    Mutation: send "that code isn't right" on a WRONG outcome — this fails.
+
+    "Pair a phone" now checks the token and starts the loop, so ``getMe`` and
+    ``getUpdates`` are on the wire. Neither reaches a phone, and the assertion is
+    about what reaches a phone."""
     harness, telegram, provider = _server(tmp_path)
     try:
         channel = _Channel(harness, telegram, provider)
         opened = _call(harness, "channel.beginPairing", {"id": channel.id}, 30)
         channel.message("AAA-AAA", sender="12345")
-        assert telegram.requests == []
+        assert telegram.to_a_chat() == []
         pending = harness.server._channel_service.pending_pairing(channel.id)
         assert pending is not None and pending.attempts_left == 2
         # ...and the right code, in the same window, speaks exactly once.
@@ -310,6 +381,7 @@ def test_a_wrong_pairing_code_is_silent_and_spends_the_attempt(tmp_path):
         assert [row["label"] for row in rows] == ["petr"]
         assert harness.server._channel_service.pending_pairing(channel.id) is None
     finally:
+        harness.server._channel_service.stop_all()
         _shutdown(harness.reader, harness.thread)
 
 
@@ -1220,3 +1292,501 @@ def test_the_sleep_setting_survives_a_restore(tmp_path):
         assert _call(harness, "channel.list", {}, 334)["channels"][0]["onWake"] == "answer"
     finally:
         _shutdown(harness.reader, harness.thread)
+
+
+# ---------------------------------------------------------------------------
+# (13) Start links: the QR code, and a bare Start
+# ---------------------------------------------------------------------------
+
+
+def _frames(harness, method: str, **params) -> list[dict]:
+    """Every notification of one method whose params include ``params``."""
+    return [
+        frame for frame in list(harness.writer.frames)
+        if frame.get("method") == method
+        and all(frame.get("params", {}).get(k) == v for k, v in params.items())
+    ]
+
+
+def _until(predicate, seconds: float = 5.0) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and not predicate():
+        time.sleep(0.02)
+    assert predicate(), "the condition never came true"
+
+
+def test_a_bare_start_from_a_stranger_spends_no_attempt_and_says_nothing(tmp_path):
+    """Telegram sends ``/start`` the first time anybody opens a bot. Before this
+    change it was offered as a code and spent one of the window's three attempts, so
+    a person who opened the bot and then typed the code had two left without knowing
+    it. It is now counted as a stranger knocking, spends nothing, and gets no reply.
+    Its text is empty, and ``offer`` spends nothing on text that cannot be a code.
+
+    Mutations: remove the ``could_be_code`` check from ``offer`` (an attempt is
+    spent); drop ``or is_start`` from the input check (the message is discarded
+    before it is counted); drop ``isStart`` from the ``_hand_off`` payload (the
+    same)."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        _call(harness, "channel.beginPairing", {"id": channel.id}, 30)
+        channel.message("", sender="12345", start=True)
+        assert telegram.to_a_chat() == []
+        pending = harness.server._channel_service.pending_pairing(channel.id)
+        assert pending is not None and pending.attempts_left == 3
+        assert _call(harness, "channel.status", {"id": channel.id}, 31)["unknownSenders"] == 1
+        assert provider.offered == []
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_scanning_the_qr_code_pairs_a_stranger_with_the_code_it_carries(tmp_path):
+    """The start link carries the code, and its payload is offered exactly as a
+    typed code is. A wrong one spends an attempt in silence, and the right one pairs,
+    is answered once, and tells the desk.
+
+    Mutation: treat every start from a stranger as a bare one (count it and stop) —
+    the right code no longer pairs."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        code = _call(harness, "channel.beginPairing", {"id": channel.id}, 32)["code"]
+        channel.message("AAA-AAA", sender="12345", start=True)
+        assert telegram.to_a_chat() == []
+        pending = harness.server._channel_service.pending_pairing(channel.id)
+        assert pending is not None and pending.attempts_left == 2
+
+        channel.message(code, sender="12345", start=True)
+        assert telegram.sent() == [_PAIRED]
+        rows = _call(harness, "channel.pairings", {"id": channel.id}, 33)["pairings"]
+        assert [row["label"] for row in rows] == ["petr"]
+        assert harness.server._channel_service.pending_pairing(channel.id) is None
+        assert _frames(harness, "channel.remoteTurn", id=channel.id, phase="paired")
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_paired_phone_that_opens_the_bot_again_is_told_it_is_paired(tmp_path):
+    """Scanning the QR code again, or tapping Start on a bot that is already paired,
+    used to arrive as a question for the model. It is not one, so no model turn runs
+    and the phone's conversation is not even created. The phone gets the paired
+    sentence instead of silence, which tells a paired sender nothing new.
+
+    Mutation: remove the paired-start branch — a model turn runs for each start and
+    its answer is sent."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        channel.message("", start=True)
+        channel.message("SOMETHING-ELSE", start=True)
+        assert telegram.sent() == [_PAIRED, _PAIRED]
+        assert provider.offered == [], "a start must not reach a model"
+        assert channel.id not in harness.server._channel_conversations
+        # An ordinary message from the same phone is still an ordinary turn.
+        channel.message("what is the capital of France?")
+        assert telegram.sent() == [_PAIRED, _PAIRED, "Here you go."]
+    finally:
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_paired_phone_scanning_the_live_code_closes_the_window(tmp_path):
+    """A person who is already paired and scans the QR code the desktop is showing
+    would otherwise leave the desktop on that screen until the window ran out. The
+    live code closes the window and the desk hears ``paired``. A payload that is not
+    the code leaves the window alone and spends none of its attempts, because a
+    paired sender is not guessing their way in.
+
+    Mutations: skip the ``cancel_pairing`` in ``_answer_paired_start`` (the window
+    stays open); skip its ``paired`` notification; check the payload with ``offer``
+    instead of ``confirms`` (the wrong payload spends an attempt)."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        code = _call(harness, "channel.beginPairing", {"id": channel.id}, 34)["code"]
+        channel.message("AAA-AAA", start=True)
+        pending = harness.server._channel_service.pending_pairing(channel.id)
+        assert pending is not None and pending.attempts_left == 3
+        assert not _frames(harness, "channel.remoteTurn", id=channel.id, phase="paired")
+
+        channel.message(code, start=True)
+        assert harness.server._channel_service.pending_pairing(channel.id) is None
+        assert _frames(harness, "channel.remoteTurn", id=channel.id, phase="paired")
+        assert telegram.sent() == [_PAIRED, _PAIRED]
+        assert provider.offered == []
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_start_that_waited_overnight_is_declined_like_any_message(tmp_path):
+    """The late-message check answers a start the way it answers anything else.
+
+    Mutation: move the paired-start branch above the late-message check — the phone
+    is told it is paired about a message it sent eight hours ago."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        channel.message("", start=True, sent_at=int(time.time()) - 8 * 3600)
+        assert telegram.sent() == [_ARRIVED_WHILE_ASLEEP]
+    finally:
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_start_under_the_ask_first_guard_gets_the_refusal(tmp_path):
+    """Under ``auto_grant_scope == "none"`` a phone can get no answers, and the
+    paired sentence promises answers. The guard's sentence is the true reply, so the
+    guard is asked before a start is answered.
+
+    Mutation: move the paired-start branch above the guard interlock — the phone is
+    promised answers it will not get."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        _call(harness, "profile.set", {"profileId": "custom"}, 35)
+        _call(
+            harness,
+            "guards.set",
+            {"destructiveCard": "per_invocation", "autoGrantScope": "none"},
+            36,
+        )
+        channel.message("", start=True)
+        assert telegram.sent() == [_GUARDS_REFUSE_REMOTE]
+    finally:
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_start_that_arrives_after_leaving_developer_changes_nothing(tmp_path):
+    """The profile is asked again for every message, and a start is a message. A
+    window can still be open in memory when the profile leaves Developer, and a
+    start carrying its code must not pair a phone from Simple, nor may a paired
+    phone's start be answered.
+
+    Mutation: move the profile check below the pairing lookup — the stranger pairs
+    from Simple and is answered."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        _call(harness, "profile.set", {"profileId": "simple"}, 37)
+        pending = harness.server._channel_service.begin_pairing(channel.id)
+        channel.message(pending.code, sender="12345", start=True)
+        channel.message("", start=True)
+        assert telegram.to_a_chat() == []
+        assert len(_call(harness, "channel.pairings", {"id": channel.id}, 38)["pairings"]) == 1
+        assert pending.attempts_left == 3
+    finally:
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_backlog_of_ordinary_messages_leaves_the_window_for_the_code(tmp_path):
+    """When "Pair a phone" starts a loop that was not running, Telegram hands over
+    everything it held for the bot, and those messages are handled after the window
+    opens. Three ordinary messages used to spend all three attempts, and the scan
+    that followed failed in silence. Text that cannot be a code now spends nothing,
+    so the start link's code still pairs.
+
+    Mutation: remove the ``could_be_code`` check from ``offer`` — the backlog
+    closes the window and the code arrives to nothing."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        for update_id, text in enumerate(["hello?", "is this working", "hi there"], 1):
+            telegram.update(update_id=update_id, text=text, sender="12345")
+        code = _call(harness, "channel.beginPairing", {"id": channel.id}, 44)["code"]
+        service = harness.server._channel_service
+        _until(lambda: service.status(channel.id).unknown_senders == 3)
+        pending = service.pending_pairing(channel.id)
+        assert pending is not None and pending.attempts_left == 3
+        assert telegram.to_a_chat() == []
+
+        telegram.update(update_id=4, text=f"/start {code}", sender="12345")
+        _until(lambda: telegram.sent() == [_PAIRED])
+        assert len(_call(harness, "channel.pairings", {"id": channel.id}, 45)["pairings"]) == 1
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_start_messages_travel_the_real_loop_with_their_flag(tmp_path):
+    """The adapter sets the start flag and the hand-off carries it, and this test
+    runs both halves through ``getUpdates``. A bare ``/start`` from a stranger
+    waiting at Telegram from before the window opened is counted and spends nothing,
+    and the group form ``/start@addison_bot <code>`` pairs.
+
+    Mutation: drop ``isStart`` from the ``_hand_off`` payload — the bare start is
+    discarded as an empty message and the counter stays at zero."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        telegram.update(update_id=1, text="/start", sender="12345")
+        code = _call(harness, "channel.beginPairing", {"id": channel.id}, 39)["code"]
+        service = harness.server._channel_service
+        _until(lambda: service.status(channel.id).unknown_senders == 1)
+        pending = service.pending_pairing(channel.id)
+        assert pending is not None and pending.attempts_left == 3
+
+        telegram.update(update_id=2, text=f"/start@addison_bot {code}", sender="12345")
+        _until(lambda: telegram.sent() == [_PAIRED])
+        assert service.pending_pairing(channel.id) is None
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+# ---------------------------------------------------------------------------
+# (14) A bot another program is reading, and a loop that was replaced
+# ---------------------------------------------------------------------------
+
+
+def test_a_bot_another_program_is_reading_stops_listening_in_the_in_use_state(tmp_path):
+    """Telegram answers ``getUpdates`` with 409 while a webhook is set on the bot or
+    another program polls the same token. The loop used to treat that as an outage
+    and back off forever with "Telegram isn't answering", while "Check now" kept
+    succeeding. It now stops, and the state is ``in_use`` with no error, so the
+    panel's own status line says what to do. Telegram's description of the conflict
+    appears nowhere Addison writes.
+
+    Mutations: remove the ``ChannelInUse`` branch in ``_poll_loop`` (the loop backs
+    off and keeps polling); map 409 to ``ChannelRefused`` in ``_request`` (the
+    same)."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        telegram.updates_status = 409
+        assert _call(harness, "channel.setEnabled", {"id": channel.id, "enabled": True}, 70)["ok"]
+        service = harness.server._channel_service
+        changed = harness.writer.wait_for(
+            lambda f: f.get("method") == "channel.stateChanged"
+            and f.get("params", {}).get("state") == "in_use"
+        )
+        assert changed["params"] == {"id": channel.id, "state": "in_use"}
+        status = _call(harness, "channel.status", {"id": channel.id}, 71)
+        assert status["state"] == "in_use"
+        assert "error" not in status
+        assert service.listening_channels() == []
+        polls = telegram.polls()
+        time.sleep(0.3)
+        assert telegram.polls() == polls, "the loop kept polling after the conflict"
+        assert "Conflict" not in str(harness.writer.frames)
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_conflict_on_send_is_one_undelivered_message_and_listening_goes_on(tmp_path):
+    """``ChannelInUse`` is a ``ChannelRefused``, so a 409 answering ``sendMessage``
+    is one message that could not go. The status line says so once and the loop
+    keeps listening, because whether the channel has to stop is the poll loop's
+    decision.
+
+    Mutation: add an ``except ChannelInUse`` to ``deliver`` that stops the channel
+    as ``in_use`` — the loop stops and this fails."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        assert _call(harness, "channel.setEnabled", {"id": channel.id, "enabled": True}, 72)["ok"]
+        telegram.send_status = 409
+        channel.message("hello")
+        status = _call(harness, "channel.status", {"id": channel.id}, 73)
+        assert (status["state"], status.get("error")) == ("listening", SEND_REFUSED)
+        assert harness.server._channel_service.listening_channels() == [channel.id]
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_token_refused_on_send_still_stops_the_loop_that_is_running(tmp_path):
+    """The send side has no loop of its own, so a token refused on ``sendMessage``
+    stops whichever loop is running. The rule that an old loop may only end itself
+    must not narrow this path.
+
+    Mutation: apply the current-loop check to the send side too, so a call with
+    ``own=None`` returns early — the loop survives a rejected token."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        channel.pair()
+        assert _call(harness, "channel.setEnabled", {"id": channel.id, "enabled": True}, 74)["ok"]
+        telegram.send_status = 401
+        channel.message("hello")
+        assert _call(harness, "channel.status", {"id": channel.id}, 75)["state"] == "token_rejected"
+        assert harness.server._channel_service.listening_channels() == []
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_checking_a_connection_with_no_token_saved_asks_telegram_nothing(tmp_path):
+    """An empty keychain entry is not a credential, and a request made with one goes
+    to a real service and can only fail. "Check now" and "Pair a phone" both ask
+    through ``ChannelService.verify``, which raises before any request when there is
+    nothing to ask with. The answer is unchanged, and nothing is recorded about the
+    token.
+
+    Mutation: remove the empty-token check in ``verify`` — ``getMe`` goes out with
+    an empty token and this fails on the request list."""
+    harness, telegram, provider = _server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        harness.server._shell_bridge.token = ""  # type: ignore[union-attr]
+        answer = _call(harness, "channel.connect", {"id": channel.id}, 76)
+        assert answer == {"ok": False, "error": TRANSPORT_UNREACHABLE}
+        assert telegram.requests == []
+        assert _call(harness, "channel.list", {}, 77)["channels"][0]["tokenPresent"] == "present"
+    finally:
+        _shutdown(harness.reader, harness.thread)
+
+
+class _ReplacedMidPoll:
+    """One adapter shared by a loop and the loop that replaces it.
+
+    The first poll belongs to the old loop. While it is open the person presses Stop
+    and then Start, done here by calling the service the way ``channel.setEnabled``
+    does, and then the old poll comes back with ``outcome``. Every later poll belongs
+    to the new loop and stays open until the test releases it, as a quiet long poll
+    does. Telegram answers the older of two open polls with a conflict, so the
+    ``ChannelInUse`` case is the one that happens in practice."""
+
+    kind = "telegram"
+
+    def __init__(self, outcome: object, *, replace_on_first_poll: bool = True) -> None:
+        self.limits = ChannelLimits(
+            max_message_chars=4096, max_poll_seconds=50, supports_typing_hint=False
+        )
+        self.backoff = Backoff()
+        self.outcome = outcome
+        self.service: ChannelService | None = None
+        self.new_stop: threading.Event | None = None
+        self.new_loop_polling = threading.Event()
+        self.release = threading.Event()
+        #: Set by the test once it has noted which thread is the old loop.
+        self.go = threading.Event()
+        self._replace_on_poll = replace_on_first_poll
+
+    def press_stop_then_start(self) -> None:
+        assert self.service is not None
+        assert self.go.wait(5), "the test never let the old loop go on"
+        self.service.stop("chan-1")
+        self.service.start("chan-1", self.kind)
+        self.new_stop = self.service._stops["chan-1"]
+        assert self.new_loop_polling.wait(5), "the new loop never polled"
+        # A value the new loop's backoff could hold, so any write to it shows.
+        self.backoff.seconds, self.backoff.failures = 20, 3
+
+    def poll(self, token: str, cursor: str | None, seconds: int) -> PollResult:
+        if self._replace_on_poll:
+            self._replace_on_poll = False
+            self.press_stop_then_start()
+            if isinstance(self.outcome, BaseException):
+                raise self.outcome
+            assert isinstance(self.outcome, PollResult)
+            return self.outcome
+        self.new_loop_polling.set()
+        self.release.wait(10)
+        return PollResult(messages=(), next_cursor=cursor)
+
+    def verify_token(self, token: str):
+        raise AssertionError("not asked in this test")
+
+    def send(self, token: str, chat_id: str, text: str) -> str:
+        raise AssertionError("not asked in this test")
+
+    def working_hint(self, token: str, chat_id: str) -> None:
+        return None
+
+    def pairing_link(self, handle: str | None, code: str) -> str | None:
+        return None
+
+
+def _replaced_service(adapter: _ReplacedMidPoll, token_for=None) -> ChannelService:
+    service = ChannelService(
+        adapters={"telegram": adapter},  # type: ignore[dict-item]
+        token_for=token_for or (lambda kind: "tok"),
+        enqueue_turn=lambda job: None,
+        notify=lambda method, params: None,
+        screen_text=screen,
+    )
+    adapter.service = service
+    return service
+
+
+def _assert_the_new_loop_is_untouched(service: ChannelService, adapter: _ReplacedMidPoll, old):
+    adapter.go.set()
+    old.join(timeout=5)
+    assert not old.is_alive(), "the old loop did not end"
+    assert adapter.new_stop is not None
+    assert service._stops.get("chan-1") is adapter.new_stop, "the old loop removed the new one"
+    assert not adapter.new_stop.is_set(), "the old loop stopped the new one"
+    assert service.listening_channels() == ["chan-1"]
+    status = service.status("chan-1")
+    assert (status.state, status.error) == ("listening", None)
+    assert (adapter.backoff.seconds, adapter.backoff.failures) == (20, 3)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        RuntimeError("a defect nobody anticipated"),
+        ChannelUnavailable(TRANSPORT_UNREACHABLE),
+        ChannelAuthFailed(TOKEN_REJECTED),
+        ChannelInUse(CHANNEL_IN_USE),
+        PollResult(messages=(), next_cursor="5"),
+    ],
+    ids=["defect", "unreachable", "token-rejected", "in-use", "answered"],
+)
+def test_a_loop_replaced_while_its_poll_was_open_leaves_the_new_loop_alone(outcome):
+    """A person presses Stop and then Start while the old loop's long poll is open,
+    which can last fifty seconds. When the old poll comes back, whatever it brings,
+    the old loop must return without writing a status, touching the shared backoff
+    or removing anything from ``_stops`` and ``_threads``. Those belong to the new
+    loop by then.
+
+    Mutations, one per path: remove the current-loop check at the top of
+    ``_wait_backoff`` (defect and unreachable write ``backing_off`` and bump the
+    backoff); restore the unconditional pop in the token-rejected path, or pass
+    ``own=None`` from the ``ChannelInUse`` branch (the new loop is removed and
+    stopped); move ``note_success`` back above the stop check (the answered case
+    resets the new loop's backoff)."""
+    adapter = _ReplacedMidPoll(outcome)
+    service = _replaced_service(adapter)
+    service.start("chan-1", "telegram")
+    old = service._threads["chan-1"]
+    try:
+        _assert_the_new_loop_is_untouched(service, adapter, old)
+    finally:
+        adapter.release.set()
+        service.stop_all()
+
+
+def test_a_loop_replaced_while_it_read_the_keychain_leaves_the_new_loop_alone():
+    """The same rule on the one way out of the loop that is not a poll. A keychain
+    read can wait on a dialog, and the old loop's read coming back empty after a
+    Stop and a Start must not record ``no_token`` over the new loop or remove it.
+
+    Mutation: restore the old ``no_token`` line, ``self._set_state(channel_id,
+    STATE_NO_TOKEN, error=None)`` — the new loop's status reads ``no_token``."""
+    adapter = _ReplacedMidPoll(None, replace_on_first_poll=False)
+    reads = {"count": 0}
+
+    def token_for(kind: str) -> str:
+        reads["count"] += 1
+        if reads["count"] == 1:
+            adapter.press_stop_then_start()
+            return ""
+        return "tok"
+
+    service = _replaced_service(adapter, token_for)
+    service.start("chan-1", "telegram")
+    old = service._threads["chan-1"]
+    try:
+        _assert_the_new_loop_is_untouched(service, adapter, old)
+    finally:
+        adapter.release.set()
+        service.stop_all()

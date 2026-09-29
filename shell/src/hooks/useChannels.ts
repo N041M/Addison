@@ -179,12 +179,19 @@ export function useChannels({ connected }: UseChannelsArgs) {
     const stopTurn = subscribe(Method.ChannelRemoteTurn, (params) => {
       const id = typeof params.id === "string" ? params.id : null;
       if (!id) return;
+      const phase = typeof params.phase === "string" ? params.phase : "";
       setLastRemoteTurn({
         channelId: id,
-        phase: typeof params.phase === "string" ? params.phase : "",
+        phase,
         summary: typeof params.summary === "string" ? params.summary : undefined,
         at: Date.now(),
       });
+      // The core closes the pairing window when a phone pairs, so the panel closes
+      // its code and QR code as well. Left open, they would invite a second scan of
+      // a code that no longer works.
+      if (phase === "paired") {
+        setPairing((open) => (open?.channelId === id ? null : open));
+      }
       // A turn that paired a phone changes the device list, and a turn of any kind
       // may have changed the unknown-sender count.
       refreshStatuses([id]);
@@ -400,8 +407,16 @@ export function useChannels({ connected }: UseChannelsArgs) {
     [refreshChannels],
   );
 
-  /** Ask for a pairing code. It is shown on THIS screen and typed on the phone —
-   * the secret stays on the trusted surface and only the proof goes over the wire. */
+  /** Ask for a pairing code, and the Telegram start link that carries it when the
+   * core has one. Both are shown on THIS screen. The phone sends the code back,
+   * either by scanning the link and tapping Start or by typing it.
+   *
+   * Asking also checks the token and starts listening when Addison was not
+   * listening. The core records the token check and the switch on the saved row, so
+   * the list and the statuses are re-read afterwards, as `handleSetEnabled` does.
+   * That happens after a refusal too, because a rejected token changes the row as
+   * well. The core's `stateChanged` frame prompts a status re-read of its own, and
+   * this one covers a frame that never arrives. */
   const handleBeginPairing = useCallback(
     async (channel: Channel): Promise<void> => {
       setBusy(true);
@@ -414,6 +429,7 @@ export function useChannels({ connected }: UseChannelsArgs) {
             channelId: channel.id,
             code: res.code,
             expiresAt: res.expiresAt ?? 0,
+            link: res.link,
           });
         } else {
           setError(res.error ?? "Addison couldn't start pairing just now.");
@@ -422,9 +438,10 @@ export function useChannels({ connected }: UseChannelsArgs) {
         setError("Addison couldn't start pairing just now.");
       } finally {
         setBusy(false);
+        refreshChannels();
       }
     },
-    [],
+    [refreshChannels],
   );
 
   const handleCancelPairing = useCallback(
