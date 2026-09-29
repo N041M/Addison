@@ -14,12 +14,13 @@ the thing pairing exists to establish — and on most transports a bot cannot me
 somebody who has not messaged it first anyway. This direction also puts the secret
 on the TRUSTED screen and the proof on the wire, which is the correct way round.
 
-**SILENCE ON EVERY NON-MATCH.** A reply is an oracle: it tells a stranger who
-guessed a bot name that the bot is real, that it is running, and that somebody is
-behind it. So only :attr:`PairingOutcome.MATCHED` produces any outbound message —
-a wrong code, an expired window and an exhausted budget all say nothing at all,
-and the attempt is still spent. The only thing an unpaired message produces is a
-COUNTER the desk can see, so the person knows strangers are knocking.
+**SILENCE ON EVERY NON-MATCH.** A reply would tell a stranger who guessed a bot
+name that the bot is real, that it is running, and that somebody is behind it. So
+only :attr:`PairingOutcome.MATCHED` produces any outbound message. A wrong code, an
+expired window and an exhausted budget all get silence, and a wrong answer that
+could have been a code still spends an attempt. Text that cannot be a code spends
+none (see :func:`offer`). The only thing an unpaired message produces is a counter
+the desk can see, so the person knows strangers are knocking.
 
 **WHAT THE CODE DEFENDS, at its real strength.** It stops a stranger who knows the
 bot's name from becoming the operator, and it stops observed content from
@@ -110,11 +111,24 @@ def offer(
 ) -> PairingOutcome:
     """Somebody sent something while a window was open. Was it the code?
 
-    ORDER IS BEHAVIOUR, and it is expiry first: a window whose deadline has passed
-    answers ``EXPIRED`` even for the right code, and spends no attempt — the budget
-    exists to bound guessing inside a live window, and there is nothing left to
-    guess at once one has closed. Then the constant-time compare, then the
-    decrement, so a wrong answer always costs one whatever else is true.
+    The order of the checks is part of the behaviour. Expiry comes first, so a
+    window whose deadline has passed answers ``EXPIRED`` even for the right code
+    and spends no attempt. The budget bounds guessing inside a live window, and
+    there is nothing left to guess once a window has closed. The constant-time
+    compare comes next, and then the decrement.
+
+    Only text that could be a code spends an attempt. ``matches`` compares
+    normalised text, so text that is not six characters from the code alphabet
+    once normalised (``automation_nonce.could_be_code``) can never match. It is
+    answered ``WRONG`` with the budget untouched. That includes text with emoji,
+    accented letters or other characters outside ASCII, which ``matches`` compares
+    as UTF-8 bytes rather than raising. Every message that could match still costs
+    one, so the budget still bounds every possible guess. Ordinary chat therefore no
+    longer uses the window up. That covers "hello?" typed before the code and a bare
+    Start. It also covers messages the transport held while nothing was listening
+    and hands over when "Pair a phone" starts the loop, as long as none of them is
+    shaped like a code. A held message that is shaped like a code, such as a code
+    from an earlier window, still spends an attempt.
 
     ``sender_id`` IS NOT CONSULTED, and the parameter is here anyway. Matching is on
     the code alone: the code IS the proof, and the sender is what the caller binds
@@ -132,8 +146,28 @@ def offer(
         return PairingOutcome.EXHAUSTED
     if automation_nonce.matches(typed, pending.code):
         return PairingOutcome.MATCHED
+    # After the compare, so a match is never refused for its shape. For a minted
+    # code the order makes no difference.
+    if not automation_nonce.could_be_code(typed):
+        return PairingOutcome.WRONG
     pending.attempts_left -= 1
     # The budget having just reached zero is reported as EXHAUSTED rather than
     # WRONG, so the service can close the window on the same answer that spends
     # the last attempt instead of waiting for a fourth message that may never come.
     return PairingOutcome.WRONG if pending.attempts_left > 0 else PairingOutcome.EXHAUSTED
+
+
+def confirms(pending: PendingPairing, typed: object, now: int | None = None) -> bool:
+    """Whether ``typed`` is this window's code while the window is still live, with
+    no attempt spent.
+
+    For a sender who is already paired and scans the desktop's QR code again. That
+    sender authorises nothing new by matching, since the pairing row exists, so
+    the only effect of a match is closing the window on the desktop. A mismatch
+    spends nothing because the attempt budget bounds strangers guessing their way
+    in, and this sender is not a stranger. Expiry and a spent budget are checked in
+    the same order :func:`offer` checks them."""
+    stamp = int(time.time()) if now is None else now
+    if stamp >= pending.expires_at or pending.attempts_left <= 0:
+        return False
+    return automation_nonce.matches(typed, pending.code)

@@ -40,7 +40,8 @@ payload this module builds. The webview hands the token straight to the shell's
 `keychain.getChannelKey`, inside the service, for the length of one request. What a
 row carries instead is `token_present`, the `provider_config.secret_presence`
 vocabulary: whether a token is BELIEVED to exist, never any part of one. It becomes
-'present' only when a transport has been ASKED (`channel.connect`) and answered.
+'present' only when a transport has been asked and has answered, which
+`channel.connect` and `channel.beginPairing` both do.
 
 **G2 is untouched, and this is where the inbound edge lands.** Addison never
 triggers itself and never speaks first. Every remote turn below traces to a
@@ -79,8 +80,8 @@ import sqlite3
 import time
 from uuid import uuid4
 
-from agent_core.channel_pairing import PairingOutcome, offer
-from agent_core.channel_service import STATE_STOPPED, PendingRequest
+from agent_core.channel_pairing import PairingOutcome, confirms, offer
+from agent_core.channel_service import STATE_STOPPED, ChannelNoToken, PendingRequest
 from agent_core.channels.adapter import (
     MAX_LABEL_CHARS,
     TOKEN_REJECTED,
@@ -142,36 +143,40 @@ _ONE_AT_A_TIME = (
     "Addison listens to one phone connection at a time. Switch {other} off first."
 )
 
-# Said ON THE PHONE — every one of these leaves this computer, so each is written
-# to be read by somebody holding a phone with no other context, and none of them
-# says anything about Addison's internals.
+# The sentences below are said on the phone. Every one of them leaves this computer,
+# so each is written for somebody holding a phone with no other context, and none of
+# them says anything about how Addison works inside.
 #
 # The guard refusal (owner decision 6, plan §3.6). Under the Custom profile a
-# person can set `auto_grant_scope = "none"`, at which point even a LOW call routes
-# to the asking flow — and a card raised for a phone would park the worker thread
-# FOREVER (`_ask_once` waits with no timeout), taking every desktop turn with it.
-# So the channel refuses the turn instead. This is a NARROWING, which is the
-# permitted direction.
+# person can set `auto_grant_scope = "none"`, and then even a LOW call routes to the
+# asking flow. A card raised for a phone would park the worker thread forever,
+# because `_ask_once` waits with no timeout, and every desktop turn would wait with
+# it. So the channel refuses the turn instead. That narrows what a phone can do,
+# which is the permitted direction.
 _GUARDS_REFUSE_REMOTE = (
     "You've asked Addison to check with you before every action, so it can't answer "
     "from your phone."
 )
-# Owner decision 8's DEFAULT: messages that arrived while the computer was asleep are
-# declined, each with one sentence. (The queue-or-decline SETTING itself is a later
-# diff; this build ships the default only, which is the safe direction.)
+# Owner decision 8's default. A message that arrived while the computer was asleep
+# is declined with this sentence, and `channels.on_wake` can change that to
+# answering it late.
 _ARRIVED_WHILE_ASLEEP = (
     "Addison wasn't running when you sent that, so it didn't answer. Send it again "
     "and it will."
 )
-# The one message a successful pairing produces. It is the ONLY thing any pairing
-# attempt can produce: a wrong code, an expired window and a spent budget all say
-# nothing at all, because a reply is an oracle (channel_pairing.py's safety frame).
+# Said when a pairing succeeds, and to an account that is already paired when it
+# opens the bot again. A pairing attempt produces nothing else. A wrong code, an
+# expired window and a spent budget all get silence, because a reply would tell a
+# stranger the bot is live (channel_pairing.py's safety frame). It says "account"
+# because pairing binds the sender id, which is the account and covers every device
+# signed in to it.
 _PAIRED = (
-    "This phone is paired with Addison. Send it a message and it will answer in "
-    "words — it won't change anything on your computer from here."
+    "Your account is paired with Addison. Send a message here and Addison will "
+    "answer in words. It won't change anything on your computer from here."
 )
-# When a turn failed on Addison's side. No stack trace, no provider name, no status
-# code: one sentence and one next step, exactly as the desk gets.
+# Said when a turn failed on Addison's side. The phone gets one sentence and one
+# next step, as the desk does, and never a stack trace, a provider name or a status
+# code.
 _TURN_FAILED = "Addison couldn't answer that just now. Try again in a moment."
 
 # What a queued request names when the tool it was refused for is not registered any
@@ -346,9 +351,9 @@ class ChannelsMixin(ServerContext):
         A WORKER JOB, never the read loop, for ``mcp.refresh``'s stated reason: it
         reaches a network, and a stranger's server must not hold the IPC pump.
 
-        It records `token_present` and STARTS NO LOOP. Switching a channel on is
-        `setEnabled`, which is deliberately a second, separate act: checking a token
-        is a question, and listening is a decision.
+        It records `token_present` and starts no loop. A loop starts only when a
+        person asks Addison to listen, with the switch (`setEnabled`) or with "Pair a
+        phone" (`beginPairing`). Checking a token never starts one on its own.
 
         No snapshot hook: this writes one derived non-secret flag, and the flag is
         excluded from capture anyway. A restore point that captured neither the
@@ -367,11 +372,17 @@ class ChannelsMixin(ServerContext):
             # asked, and now knows there is nothing usable saved.
             self.store.set_channel_token_present(row["id"], "absent")
             return {"ok": False, "error": TOKEN_REJECTED}
+        except ChannelNoToken:
+            # The keychain has no token saved, so the sentence says to paste one,
+            # because waiting will not help. Nothing is recorded. Saving a token
+            # goes from the webview to the keychain and never tells the core (G1),
+            # so an 'absent' written here would stay after the person saved one.
+            # 'absent' means only that the transport rejected a token.
+            return {"ok": False, "error": _NO_TOKEN_SAVED}
         except ChannelError:
-            # Unreachable, refused, or nothing saved to ask with. NOTHING IS
-            # RECORDED: a failed check is not evidence about a token, and writing
-            # 'absent' here would tell somebody their token is gone because their
-            # wifi dropped.
+            # Unreachable or refused. Nothing is recorded, because a failed check is
+            # not evidence about a token, and writing 'absent' here would tell
+            # somebody their token is gone because their wifi dropped.
             return {"ok": False, "error": TRANSPORT_UNREACHABLE}
         except Exception:
             return {"ok": False, "error": _CHECK_FAILED}
@@ -381,16 +392,14 @@ class ChannelsMixin(ServerContext):
     def _channel_set_enabled(self, params: dict) -> dict:
         """channel.setEnabled {id, enabled} -> {ok} | {ok:false, error}.
 
-        THE ONE CONTROL THAT MAKES A CHANNEL LIVE. Switching on starts the poll
-        loop; switching off stops it. Both write the row, which records the
-        person's intent — but the row is not what a surface believes: nothing starts
-        a loop at launch, so after a restart the truth about listening is the
-        service's alone (`channel.status`), which is step 8's "ask what is really
-        running" one subsystem over.
-
-        Switching ON requires a checked token, and refuses without one. That is not
-        ceremony: the loop would otherwise start, read an empty keychain entry and
-        stop again, leaving a switch that turns itself off with no explanation.
+        This is the switch that turns listening on and off. Switching on starts the
+        poll loop and switching off stops it. Both write the row, which records the
+        person's intent. A surface does not read listening from the row. Nothing
+        starts a loop at launch, so after a restart only the service knows whether
+        Addison is listening, and `channel.status` asks it. Step 8 does the same for
+        automations by asking the operating system what is armed. "Pair a phone" is
+        the other control that starts a loop, and it goes through the same checks
+        (:meth:`_start_listening`).
 
         Switching OFF answers in EVERY profile and needs no token, no check and no
         network. A person must always be able to stop Addison listening, and a
@@ -405,31 +414,51 @@ class ChannelsMixin(ServerContext):
             self._channel_service.stop(row["id"])
             self.store.set_channel_enabled(row["id"], False)
             return {"ok": True}
+        refusal = self._start_listening(row)
+        if refusal is not None:
+            return {"ok": False, "error": refusal}
+        return {"ok": True}
+
+    def _start_listening(self, row: dict) -> str | None:
+        """Start the poll loop for one channel and record that it is switched on.
+        Returns None when it started, or the plain sentence that says why not.
+
+        This is the ON half of ``channel.setEnabled``, and ``channel.beginPairing``
+        calls it as well, so the checks below exist in one place. Nothing is
+        started or written when any of them refuses.
+
+        A checked token is required. Without one the loop would start, read an
+        empty keychain entry and stop again, leaving a switch that turns itself off
+        with no explanation."""
         if self._mode() is not PolicyMode.OPEN:
-            return {"ok": False, "error": _DEV_ONLY}
+            return _DEV_ONLY
         if row["token_present"] != "present":
-            return {"ok": False, "error": _CHECK_FIRST if row["token_present"] == "unknown"
-                    else _NO_TOKEN_SAVED}
-        # THE GUARD INTERLOCK, AT START (owner decision 6; the other half is per
-        # turn, in `_run_channel_turn`, because guards change under a running
-        # service). Switching on a channel that would refuse every message is a
-        # switch that does nothing, and finding that out one message at a time — from
-        # a phone, with no explanation on this screen — is the worst version of it.
-        guards = self._effective_guards()
-        if guards is not None and guards.auto_grant_scope == "none":
-            return {"ok": False, "error": _GUARDS_REFUSE_REMOTE}
-        # Owner decision 11. Asked of what is RUNNING, not of the stored column.
+            return _CHECK_FIRST if row["token_present"] == "unknown" else _NO_TOKEN_SAVED
+        # The guard interlock at start (owner decision 6). The other half runs per
+        # turn in `_run_channel_turn`, because guards change under a running service.
+        # A channel that would refuse every message is a switch that does nothing,
+        # and the person would find that out one message at a time, from a phone,
+        # with no explanation on this screen.
+        if self._guards_refuse_remote():
+            return _GUARDS_REFUSE_REMOTE
+        # Owner decision 11, asked of what is running rather than of the stored
+        # column, because a stored 1 from a previous session has no loop behind it.
         for other_id in self._channel_service.listening_channels():
             if other_id == row["id"]:
                 continue
             other = self.store.get_channel(other_id)
-            return {
-                "ok": False,
-                "error": _ONE_AT_A_TIME.format(other=other["name"] if other else "the other one"),
-            }
+            return _ONE_AT_A_TIME.format(other=other["name"] if other else "the other one")
         self._channel_service.start(row["id"], row["kind"])
         self.store.set_channel_enabled(row["id"], True)
-        return {"ok": True}
+        return None
+
+    def _guards_refuse_remote(self) -> bool:
+        """Whether the ask-first guard is on (``auto_grant_scope == "none"``, owner
+        decision 6). Under it every message from a phone is refused, because a card
+        raised for a phone would park the worker thread with nobody to answer it.
+        The switch, "Pair a phone" and every remote turn ask this one question."""
+        guards = self._effective_guards()
+        return guards is not None and guards.auto_grant_scope == "none"
 
     def _channel_set_on_wake(self, params: dict) -> dict:
         """channel.setOnWake {id, onWake} -> {ok} | {ok:false, error}.
@@ -485,28 +514,89 @@ class ChannelsMixin(ServerContext):
         return payload
 
     def _channel_begin_pairing(self, params: dict) -> dict:
-        """channel.beginPairing {id} -> {ok, code, expiresAt} | {ok:false, error}.
+        """channel.beginPairing {id} -> {ok, code, expiresAt, link?} | {ok:false, error}.
 
-        Mint a code and open the window. THE DESKTOP SHOWS IT AND THE PHONE SENDS
-        IT — not the reverse: sending a code to a number somebody types in requires
-        already knowing an address, which is the thing pairing exists to establish,
-        and this direction puts the secret on the trusted screen and the proof on
-        the wire.
+        This is the "Pair a phone" button. It mints a code, makes sure Addison is
+        listening for it, and returns a link the desktop shows as a QR code. The
+        desktop shows the code and the phone sends it. The reverse would need Addison
+        to know an address for the phone already, which is the thing pairing exists
+        to establish, and this direction keeps the secret on the trusted screen.
+        Scanning the QR code sends the same code through the transport's start link,
+        so the direction is unchanged.
+
+        The steps run in this order.
+
+        1. The profile, the row, and the ask-first guard. The guard is asked every
+           time, whether or not a loop is already running, because a phone paired
+           under it could get no answers.
+        2. Ask the transport who the token belongs to, through the service call
+           ``channel.connect`` uses, to learn the bot's handle. A rejected token is
+           recorded as ``absent``. A keychain with no token saved records nothing.
+           Both are answered as ``channel.connect`` answers them. Any other failure
+           carries on without a handle, so the person still gets a code to type if a
+           loop can listen for it.
+        3. When the channel is not listening, start it through
+           :meth:`_start_listening`, which applies the switch's own checks. When
+           those refuse, no window opens. This step exists because after a restart
+           a switched-on row had no loop behind it, and a code shown then could
+           never be answered. When step 2's check failed and the token is not
+           recorded as present, the answer is ``_CHECK_FAILED`` instead of the
+           switch's "Press Check now" sentence, because the person pressed "Pair a
+           phone" and not the switch.
+        4. Open the window, and build the link when there is a handle.
 
         The window lives in memory on the service and is gone on restart, which is
         correct: an open pairing window is a moment, not a setting.
 
-        THE CODE IS NEVER PERSISTED, never logged and never put in a model's
-        context — ``automation_nonce``'s own property, kept by not writing a second
-        implementation of it."""
+        The code is never persisted, logged or put in a model's context. That is
+        ``automation_nonce``'s own property, and it is kept by not writing a second
+        implementation of it. The link contains the code, so it has the same rules.
+        It is built for this response and held nowhere else."""
         self._ensure_built()
         if self._mode() is not PolicyMode.OPEN:
             return {"ok": False, "error": _DEV_ONLY}
         row = self._channel_row(params.get("id"))
         if row is None:
             return {"ok": False, "error": _NO_SUCH_CHANNEL}
+        if self._guards_refuse_remote():
+            return {"ok": False, "error": _GUARDS_REFUSE_REMOTE}
+        handle: str | None = None
+        try:
+            identity = self._channel_service.verify(row["id"], row["kind"])
+        except ChannelAuthFailed:
+            self.store.set_channel_token_present(row["id"], "absent")
+            return {"ok": False, "error": TOKEN_REJECTED}
+        except ChannelNoToken:
+            # Nothing is recorded, for the reason ``_channel_connect`` gives.
+            return {"ok": False, "error": _NO_TOKEN_SAVED}
+        except Exception:
+            # Unreachable, a conflict, or a keychain read that failed. None of these
+            # says anything about the token, so nothing is recorded and pairing goes
+            # ahead without a link.
+            pass
+        else:
+            self.store.set_channel_token_present(row["id"], "present")
+            handle = identity.handle
+        if not self._channel_service.is_listening(row["id"]):
+            # The row is read again because step 2 may have just recorded the
+            # token as present, which is the check the switch looks at first.
+            current = self._channel_row(row["id"]) or row
+            if current["token_present"] != "present":
+                # Step 2's check failed, so Addison does not know whether a usable
+                # token is saved. A recorded 'absent' is included, because a new
+                # token may have been saved since the last check. The switch's own
+                # answer here would be "Press Check now, then switch it on", which
+                # makes no sense to somebody who pressed "Pair a phone".
+                return {"ok": False, "error": _CHECK_FAILED}
+            refusal = self._start_listening(current)
+            if refusal is not None:
+                return {"ok": False, "error": refusal}
         pending = self._channel_service.begin_pairing(row["id"])
-        return {"ok": True, "code": pending.code, "expiresAt": pending.expires_at}
+        answer: dict = {"ok": True, "code": pending.code, "expiresAt": pending.expires_at}
+        link = self._channel_service.pairing_link(row["kind"], handle, pending.code)
+        if link:
+            answer["link"] = link
+        return answer
 
     def _channel_cancel_pairing(self, params: dict) -> dict:
         """channel.cancelPairing {id} -> {ok}. Closes the window, in every profile:
@@ -711,12 +801,16 @@ class ChannelsMixin(ServerContext):
         chat_id = params.get("chatId")
         sender_id = params.get("senderId")
         text = params.get("text")
+        # A start carries only what the start link carried, which is empty when the
+        # person tapped Start on a bot they found by name. It is still a message,
+        # so empty text is accepted when this flag is set.
+        is_start = params.get("isStart") is True
         if not (
             isinstance(channel_id, str)
             and isinstance(chat_id, str)
             and isinstance(sender_id, str)
             and isinstance(text, str)
-            and text.strip()
+            and (text.strip() or is_start)
         ):
             return
         row = self._channel_row(channel_id)
@@ -735,6 +829,11 @@ class ChannelsMixin(ServerContext):
         # ---- 1. Resolve the pairing. An unknown sender is ignored IN SILENCE.
         pairing = self.store.find_channel_pairing(channel_id, sender_id)
         if pairing is None:
+            # A start is offered exactly as a typed message is, and scanning the
+            # desktop's QR code arrives this way with the code as its text. A bare
+            # start, which the transport sends when somebody opens the bot for the
+            # first time, is empty text. Empty text cannot be a code, so ``offer``
+            # spends no attempt on it, and it is counted as a stranger knocking.
             self._offer_pairing(row, chat_id, sender_id, params.get("senderLabel"), text)
             return
 
@@ -753,10 +852,23 @@ class ChannelsMixin(ServerContext):
             return
 
         # ---- 3. The guard interlock (owner decision 6).
-        guards = self._effective_guards()
-        if guards is not None and guards.auto_grant_scope == "none":
+        if self._guards_refuse_remote():
             self._channel_service.deliver(channel_id, chat_id, _GUARDS_REFUSE_REMOTE)
             self._notify_remote_turn(channel_id, "refused", _GUARDS_REFUSE_REMOTE)
+            return
+
+        # ---- 3b. A paired account that opens the chat again, or that sends the
+        # code of an open pairing window, runs no turn. The panel invites a person
+        # to type the code as well as scan it, so a paired person may do either.
+        # Neither is a question for the model. Any other text from a paired sender
+        # runs an ordinary turn below.
+        #
+        # This sits after the profile check, the late-message check and the guard
+        # check, so each of those answers these messages the way it answers any
+        # message. Under the guard that means the refusal sentence, which is the true
+        # answer to "can I use this from my phone", rather than the paired sentence.
+        if is_start or self._carries_live_code(channel_id, text):
+            self._answer_already_paired(channel_id, chat_id, text)
             return
 
         # ---- 4. Screen the text, and mark the copy the model is handed.
@@ -859,11 +971,14 @@ class ChannelsMixin(ServerContext):
     ) -> None:
         """A message from somebody who is not paired.
 
-        FOUR OUTCOMES, ONE OF WHICH SPEAKS. A match writes the row and sends the one
-        confirming message; a wrong code, an expired window and a spent budget all
-        say NOTHING — the attempt is still spent, and the only thing produced is a
-        counter on the desk. A reply would tell a stranger who guessed a bot name
-        that the bot is real, that it is running, and that somebody is behind it.
+        ``offer`` has four outcomes, and only a match sends anything to the phone.
+        A match writes the row and sends the one confirming message. A wrong code,
+        an expired window and a spent budget send nothing to the phone. On the desk
+        they add to the unknown-sender counter, and an expired or spent window also
+        sends ``pairing_closed`` as it closes. A wrong answer that could have been a code spends an
+        attempt, and text that cannot be a code spends none (``offer``). A reply
+        would tell a stranger who guessed a bot name that the bot is real, that it
+        is running, and that somebody is behind it.
 
         The same silence covers a message arriving with no window open at all, which
         is the ordinary case: most unpaired messages are not pairing attempts."""
@@ -889,9 +1004,42 @@ class ChannelsMixin(ServerContext):
             # The window is over. Closing it here rather than leaving it to time out
             # is what makes a fresh `beginPairing` the only way back — which is what
             # makes guessing pointless rather than merely slow, since the next
-            # window has a different code and a full budget.
+            # window has a different code and a full budget. The desk is told, so it
+            # stops showing a QR code nothing will accept.
             self._channel_service.cancel_pairing(channel_id)
+            self._notify_remote_turn(channel_id, "pairing_closed", None)
         self._channel_service.note_unknown_sender(channel_id)
+
+    def _answer_already_paired(self, channel_id: str, chat_id: str, text: str) -> None:
+        """An account that is already paired opened the chat through a start link or
+        the Start button, usually by scanning the desktop's QR code again, or typed
+        the code of an open pairing window.
+
+        No model turn runs and nothing is written to the remote conversation,
+        because the person asked nothing. The phone gets the paired sentence, so a
+        re-scan is answered instead of met with silence. The reply tells the sender
+        nothing new, because a paired sender already gets answers.
+
+        When a pairing window is open and ``text`` is its code, the window closes
+        and the desk hears ``already_paired``, so the desktop leaves the QR screen
+        and can say that this account was paired already. It does not hear
+        ``paired``, because no new pairing was made. A start carrying anything else
+        leaves the window alone and spends none of its attempts."""
+        closes_window = self._carries_live_code(channel_id, text)
+        if closes_window:
+            self._channel_service.cancel_pairing(channel_id)
+        self._channel_service.deliver(channel_id, chat_id, _PAIRED)
+        if closes_window:
+            self._notify_remote_turn(channel_id, "already_paired", None)
+
+    def _carries_live_code(self, channel_id: str, text: str) -> bool:
+        """Whether a pairing window is open on this channel and ``text`` is its code.
+
+        Asked only for a sender who is already paired, through
+        ``channel_pairing.confirms``, which spends no attempt. That sender gains
+        nothing by matching, so a miss has nothing to bound."""
+        pending = self._channel_service.pending_pairing(channel_id)
+        return pending is not None and confirms(pending, text)
 
     # --- the remote conversation -------------------------------------------
 

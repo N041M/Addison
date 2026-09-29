@@ -15,6 +15,17 @@ design. What these tests hold:
   (5) ``automation_nonce`` GAINED NOTHING. Pairing needed a lifetime and the arming
       ceremony does not have one; the plan is explicit that no expiry may be added
       to that module, so the deadline lives with whoever holds the state.
+  (6) Start links (2026-09-29). The Telegram adapter turns ``/start <code>`` back
+      into the code with a start flag, keeps the bot's handle only when it has a
+      username's shape, and builds ``https://t.me/<bot>?start=<code>`` only from a
+      valid handle and a valid code. A paired phone that scans again is checked
+      against the window with ``confirms``, which spends no attempt.
+  (7) "Pair a phone" starts listening through the switch's own checks, returns the
+      link, and records what it learned about the token the way "Check now" does.
+  (8) Only text that could be a code spends an attempt. Ordinary chat, a bare Start
+      and text outside ASCII leave the window's budget alone. So does a backlog the
+      transport hands over, as long as none of its messages is shaped like a code.
+      Every code-shaped guess still costs one, including one waiting in a backlog.
 
 Every test here was mutation-proven; the mutations are named in the docstrings.
 """
@@ -25,6 +36,7 @@ import ast
 import sqlite3
 from pathlib import Path
 
+import httpx
 import pytest
 
 from agent_core import automation_nonce
@@ -33,9 +45,20 @@ from agent_core.channel_pairing import (
     PairingOutcome,
     PendingPairing,
     begin,
+    confirms,
     offer,
 )
+from agent_core.channels.adapter import SEND_REFUSED, TOKEN_REJECTED, ChannelInUse
+from agent_core.channels.telegram import TelegramAdapter
+from agent_core.rpc.channels import (
+    _CHECK_FAILED,
+    _GUARDS_REFUSE_REMOTE,
+    _NO_TOKEN_SAVED,
+    _ONE_AT_A_TIME,
+)
 from tests.conftest import _shutdown, build_server
+from tests.test_channel_turn import _Channel
+from tests.test_channel_turn import _server as _turn_server
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PAIRING_SRC = _REPO_ROOT / "agent_core" / "channel_pairing.py"
@@ -288,16 +311,18 @@ def test_a_pairing_window_is_gone_when_the_process_is(tmp_path):
     somebody saw yesterday, still live today.
 
     Mutation: persist the pending window in ``settings`` — the second server would
-    then answer with a pending window and this fails."""
-    harness = build_server(tmp_path)
+    then answer with a pending window and this fails.
+
+    The channel is checked first, against a fake transport, because "Pair a phone"
+    now starts listening and refuses on a channel whose token nobody has checked."""
+    harness, telegram, provider = _turn_server(tmp_path)
     try:
-        _profile(harness, "developer")
-        _call(harness, "channel.add", {"kind": "telegram", "name": "My phone"}, 5)
-        channel_id = _call(harness, "channel.list", {}, 6)["channels"][0]["id"]
+        channel_id = _Channel(harness, telegram, provider).id
         opened = _call(harness, "channel.beginPairing", {"id": channel_id}, 7)
         assert opened["ok"] is True and len(opened["code"]) == 7
         assert harness.server._channel_service.pending_pairing(channel_id) is not None
     finally:
+        harness.server._channel_service.stop_all()
         _shutdown(harness.reader, harness.thread)
 
     second = build_server(tmp_path)
@@ -313,16 +338,593 @@ def test_the_code_is_never_written_to_the_database(tmp_path):
     a second implementation. A code in a table is a code a restore can bring back and
     a plaintext sidecar can carry.
 
-    Mutation: store the pending window in a settings row — the scan finds it."""
-    harness = build_server(tmp_path)
+    Mutation: store the pending window in a settings row — the scan finds it.
+
+    The start link contains the code, so the code scan covers it as well. A second
+    scan for the link itself could never fail while the first one passes, so there
+    is none."""
+    harness, telegram, provider = _turn_server(tmp_path)
     try:
-        _profile(harness, "developer")
-        _call(harness, "channel.add", {"kind": "telegram", "name": "My phone"}, 5)
-        channel_id = _call(harness, "channel.list", {}, 6)["channels"][0]["id"]
-        code = _call(harness, "channel.beginPairing", {"id": channel_id}, 7)["code"]
+        channel_id = _Channel(harness, telegram, provider).id
+        opened = _call(harness, "channel.beginPairing", {"id": channel_id}, 7)
+        code = opened["code"]
+        assert opened["link"].endswith(f"?start={code}")
         db_path = harness.server.store.db_path
     finally:
+        harness.server._channel_service.stop_all()
         _shutdown(harness.reader, harness.thread)
     blob = Path(db_path).read_bytes()
     assert code.encode() not in blob
     assert code.replace("-", "").encode() not in blob
+
+
+# ---------------------------------------------------------------------------
+# A paired phone that scans again: confirming a window spends nothing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "hello",
+        "hello?",
+        "hi there",
+        "",
+        "ACDEFGH",
+        "acd efgh",
+        None,
+        "Dobrý den 👋",
+        "it\u2019s me",
+        "ACD\u200bEFG",
+        "\u011b\u0161\u010d-\u00fd\u00ed\u011b",
+    ],
+)
+def test_text_that_cannot_be_a_code_spends_no_attempt(typed):
+    """``matches`` compares normalised text, so text that is not six characters from
+    the code alphabet once normalised can never match a minted code. It is answered
+    WRONG with the budget untouched, so "hello?" typed before the code, a bare Start
+    and ordinary chat no longer use the window up. The seven-character cases are made
+    only of alphabet characters, so it is the length rule that turns them away.
+    "hello?" is six characters, so it is the alphabet rule. The last four hold
+    characters outside ASCII: an emoji, a smart apostrophe, a zero-width space, and
+    the code 234-792 typed on a Czech keyboard, whose unshifted digit keys give
+    letters.
+
+    Mutations: remove the ``could_be_code`` check from ``offer`` (every case spends);
+    change ``== LENGTH`` to ``>= LENGTH`` in ``could_be_code`` (the seven-character
+    cases spend); drop the alphabet test from ``could_be_code`` ("hello?" spends);
+    compare the normalised ``str`` values in ``matches`` instead of their UTF-8
+    bytes (the cases outside ASCII raise ``TypeError``)."""
+    window = _window(code="ACD-EFG")
+    assert offer(window, "s", typed, now=0) is PairingOutcome.WRONG
+    assert window.attempts_left == 3
+
+
+def test_every_code_shaped_guess_still_spends_one_and_three_close_the_window():
+    """The budget still bounds every guess that could match. Ordinary chat between
+    the guesses changes nothing, and the third wrong code-shaped guess closes the
+    window. The right code, typed however, still matches.
+
+    Mutation: return WRONG before the decrement for every miss — the budget never
+    runs out and this fails on the third guess."""
+    window = _window(code="ACD-EFG")
+    assert offer(window, "s", "hello", now=0) is PairingOutcome.WRONG
+    assert offer(window, "s", "CDE-FGH", now=0) is PairingOutcome.WRONG
+    assert window.attempts_left == 2
+    assert offer(window, "s", "is this the right bot?", now=0) is PairingOutcome.WRONG
+    assert offer(window, "s", "cde fgh", now=0) is PairingOutcome.WRONG
+    assert window.attempts_left == 1
+    assert offer(window, "s", "7777-77", now=0) is PairingOutcome.EXHAUSTED
+    assert window.attempts_left == 0
+
+    minted = begin("chan-1", now=0)
+    assert offer(minted, "s", minted.code.lower().replace("-", " "), now=0) is (
+        PairingOutcome.MATCHED
+    )
+
+
+@pytest.mark.parametrize(
+    "typed,expected",
+    [
+        ("ACD-EFG", True),
+        ("acd efg", True),
+        ("2347-9A", True),
+        ("ABC-DEF", False),
+        ("ACD-EF0", False),
+        ("ACD-EF", False),
+        ("ACD-EFGH", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_a_code_shape_is_six_characters_from_the_alphabet(typed, expected):
+    """The predicate on its own. ``B`` and ``0`` are among the lookalikes the
+    alphabet leaves out, so a code containing them was never minted.
+
+    Mutation: drop the alphabet test from ``could_be_code`` — the ``B`` and ``0``
+    cases pass as codes."""
+    assert automation_nonce.could_be_code(typed) is expected
+    assert all(automation_nonce.could_be_code(begin("c").code) for _ in range(100))
+
+
+def test_only_the_pairing_window_skips_text_that_cannot_be_a_code():
+    """The arming ceremony counts every wrong answer against its budget, and this
+    change leaves it that way. ``could_be_code`` is defined in the nonce module and
+    called from ``channel_pairing.py`` and nowhere else in ``agent_core``.
+
+    Mutation: call ``automation_nonce.could_be_code`` from the arming path in
+    ``main.py`` — this fails, naming the file."""
+    allowed = {_NONCE_SRC.resolve(), _PAIRING_SRC.resolve()}
+    for path in sorted((_REPO_ROOT / "agent_core").rglob("*.py")):
+        if path.resolve() in allowed:
+            continue
+        assert "could_be_code" not in path.read_text(encoding="utf-8"), (
+            f"{path.relative_to(_REPO_ROOT)} uses could_be_code, which only pairing may"
+        )
+    assert "automation_nonce.could_be_code(" in _PAIRING_SRC.read_text(encoding="utf-8")
+
+
+def test_confirming_the_code_of_a_live_window_spends_no_attempt():
+    """``confirms`` is for a sender who is already paired and scans the QR code
+    again. A match only closes the window on the desktop, so a mismatch has nothing
+    to guess at and spends nothing. The same normalising as ``offer`` applies.
+
+    Mutation: decrement ``attempts_left`` on a mismatch — the budget drops to 2 and
+    this fails."""
+    window = _window()
+    assert confirms(window, "abc def", now=0) is True
+    assert confirms(window, "AAA-AAA", now=0) is False
+    assert confirms(window, "", now=0) is False
+    assert window.attempts_left == 3
+
+
+def test_an_expired_or_spent_window_is_never_confirmed():
+    """Expiry and a spent budget close a window for ``confirms`` exactly as they do
+    for ``offer``. A window that is over has nothing left to close.
+
+    Mutations: drop the expiry check (the expired case matches); drop the
+    ``attempts_left <= 0`` check (the spent case matches)."""
+    assert confirms(_window(expires_at=1_000), "ABC-DEF", now=1_000) is False
+    assert confirms(_window(expires_at=1_000), "ABC-DEF", now=999) is True
+    assert confirms(_window(attempts=0), "ABC-DEF", now=0) is False
+
+
+# ---------------------------------------------------------------------------
+# Start links, at the adapter: the only file that knows Telegram's spelling
+# ---------------------------------------------------------------------------
+
+
+def _update(text: str) -> dict:
+    return {
+        "update_id": 1,
+        "message": {
+            "message_id": 1,
+            "date": 1,
+            "text": text,
+            "chat": {"id": 999},
+            "from": {"id": 77, "username": "petr", "is_bot": False},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "typed,payload",
+    [
+        ("/start ABC-DEF", "ABC-DEF"),
+        ("/start@addison_bot ABC-DEF", "ABC-DEF"),
+        ("/start   ABC-DEF  ", "ABC-DEF"),
+        ("/start", ""),
+        ("/start@addison_bot", ""),
+    ],
+)
+def test_a_start_message_arrives_as_its_payload_with_the_start_flag(typed, payload):
+    """Scanning the desktop's QR code opens the bot, and tapping Start sends
+    ``/start <code>``. The adapter drops the command, so nothing above it has to
+    know how Telegram spells it. A bare ``/start``, which Telegram sends the first
+    time anybody opens a bot, arrives as an empty start instead of being dropped
+    for having no text.
+
+    Mutations: remove the translation in ``_message_from`` (the text keeps the
+    command and the flag stays False); drop ``(?:@[A-Za-z0-9_]+)?`` from
+    ``_START_COMMAND`` (the group form stops matching); return None for an empty
+    text after the translation (a bare start is dropped)."""
+    message = TelegramAdapter()._message_from(_update(typed))
+    assert message is not None, f"{typed!r} was dropped"
+    assert message.is_start is True
+    assert message.text == payload
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "ABC-DEF",
+        "/startle",
+        "hello /start ABC-DEF",
+        "/stop",
+        "/start what I meant to ask\nis this",
+        "/start\nwhat is the capital of France?",
+    ],
+)
+def test_anything_else_arrives_as_an_ordinary_message(typed):
+    """Only the start command is translated. A typed code still arrives as the code,
+    and text that only contains ``/start`` somewhere is somebody's words. So is a
+    message of several lines that begins with ``/start``, because a start link never
+    carries a line break.
+
+    Mutations: ``_START_COMMAND.search`` instead of ``fullmatch`` (``/startle`` and
+    the third case become starts); put ``re.DOTALL`` back on the pattern (the fifth
+    case becomes a start); widen ``[ \\t]+`` back to ``\\s+`` (the sixth does)."""
+    message = TelegramAdapter()._message_from(_update(typed))
+    assert message is not None
+    assert message.is_start is False
+    assert message.text == typed
+
+
+def _answering_get_me(result: dict) -> TelegramAdapter:
+    return TelegramAdapter(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"ok": True, "result": result})
+            )
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "username,handle",
+    [
+        ("addison_bot", "addison_bot"),
+        ("Addison_Home_Bot", "Addison_Home_Bot"),
+        ("abcde", "abcde"),
+        ("a" + "b" * 31, "a" + "b" * 31),
+        ("abcd", None),
+        ("a" + "b" * 32, None),
+        ("1addison_bot", None),
+        ("addison-bot", None),
+        ("addison_bot?start=EVIL", None),
+        ("", None),
+        (None, None),
+        (42, None),
+    ],
+)
+def test_the_handle_is_kept_only_when_it_has_a_usernames_shape(username, handle):
+    """The handle becomes part of a URL a phone opens, so ``getMe``'s username is
+    kept only when it has the shape of a Telegram username: 5 to 32 letters, digits
+    and underscores, starting with a letter. The display name is unaffected.
+
+    Mutations: set ``handle = username`` without the check (every None row fails);
+    widen ``{4,31}`` to ``{0,31}`` (the four-character row fails)."""
+    result = {"first_name": "Addison"} if username is None else {"username": username}
+    identity = _answering_get_me(result).verify_token("tok")
+    assert identity.handle == handle
+    if username is None:
+        assert identity.display_name == "Addison"
+
+
+def test_the_pairing_link_opens_the_bot_with_the_code():
+    """The link the desktop shows as a QR code. Every code the nonce module mints
+    fits Telegram's start payload, so a link can always be built for one.
+
+    Mutation: mint codes with a space between the groups — no link is built for
+    them and this fails."""
+    adapter = TelegramAdapter()
+    assert (
+        adapter.pairing_link("addison_bot", "ABC-DEF") == "https://t.me/addison_bot?start=ABC-DEF"
+    )
+    for _ in range(200):
+        code = begin("chan-1").code
+        assert adapter.pairing_link("addison_bot", code) == (
+            f"https://t.me/addison_bot?start={code}"
+        )
+    assert adapter.pairing_link("addison_bot", "A" * 64) is not None
+
+
+@pytest.mark.parametrize(
+    "handle",
+    [None, "", "abcd", "addison bot", "addison_bot/x", "addison_bot?a=b", "a" * 40],
+)
+def test_no_link_is_built_for_a_handle_without_a_usernames_shape(handle):
+    """Mutation: drop the handle check in ``pairing_link`` — a link is built around
+    whatever the handle was, including a path or a query."""
+    assert TelegramAdapter().pairing_link(handle, "ABC-DEF") is None
+
+
+@pytest.mark.parametrize(
+    "code", ["", "ABC DEF", "ABC/DEF", "ABC-DEF&x=1", "A" * 65, "\u00c4BC-DEF"]
+)
+def test_no_link_is_built_for_a_code_a_start_link_cannot_carry(code):
+    """Telegram's start payload is 1 to 64 characters of ``A-Z a-z 0-9 _ -``.
+
+    Mutation: drop the code check in ``pairing_link`` — the link carries a space, a
+    second query parameter or an over-long payload."""
+    assert TelegramAdapter().pairing_link("addison_bot", code) is None
+
+
+def test_a_conflict_carries_the_send_sentence_and_no_words_of_its_own():
+    """The words for a bot another program reads live once, in the panel's status
+    line. The exception carries ``SEND_REFUSED``, because the send side is the only
+    place its sentence could reach a person, and Telegram's own description of the
+    conflict is never read.
+
+    Mutation: raise ``ChannelInUse`` with any other sentence in ``_request`` — this
+    fails."""
+    adapter = TelegramAdapter(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    409, json={"ok": False, "description": "Conflict: terminated"}
+                )
+            )
+        )
+    )
+    with pytest.raises(ChannelInUse) as raised:
+        adapter.send("tok", "999", "hello")
+    assert str(raised.value) == SEND_REFUSED
+
+
+def test_a_code_typed_outside_ascii_is_a_wrong_answer_and_never_an_error():
+    """``hmac.compare_digest`` raises ``TypeError`` on a ``str`` with any character
+    outside ASCII. ``matches`` compares UTF-8 bytes, so the answer is False.
+
+    Mutation: compare the normalised ``str`` values again — this raises."""
+    for typed in ["\u011b\u0161\u010d-\u00fd\u00ed\u011b", "it\u2019s me", "👋", "ACD\u200bEFG"]:
+        assert automation_nonce.matches(typed, "ACD-EFG") is False
+    assert automation_nonce.matches("acd efg", "ACD-EFG") is True
+
+
+# ---------------------------------------------------------------------------
+# "Pair a phone" starts listening, and returns the link
+# ---------------------------------------------------------------------------
+
+
+def _any_answer(harness, method: str, params: dict, request_id: int) -> dict:
+    """The frame for one request whether it is a result or an error, so a test can
+    assert which it was rather than wait for a result that never comes."""
+    harness.reader.feed({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+    return harness.writer.wait_for(
+        lambda f: f.get("id") == request_id and ("result" in f or "error" in f)
+    )
+
+
+def test_pair_a_phone_starts_listening_when_a_restart_left_nothing_running(tmp_path):
+    """The failure the owner hit. The row said the channel was on, nothing starts a
+    loop when the app opens, and "Pair a phone" minted a code that nothing was
+    listening for. It now starts the loop through the switch's own checks, and it
+    returns the start link the desktop shows as a QR code.
+
+    The restart is reproduced as the state it leaves behind: the row says the
+    channel is on, and the service runs no loop for it.
+
+    Mutations: remove the ``_start_listening`` call from ``_channel_begin_pairing``
+    (nothing listens); stop adding ``link`` to the answer."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        service = harness.server._channel_service
+        assert _call(harness, "channel.setEnabled", {"id": channel.id, "enabled": True}, 10)["ok"]
+        service.stop(channel.id)
+        assert _call(harness, "channel.list", {}, 11)["channels"][0]["enabled"] is True
+        assert service.listening_channels() == []
+
+        opened = _call(harness, "channel.beginPairing", {"id": channel.id}, 12)
+        assert opened["ok"] is True
+        assert opened["link"] == f"https://t.me/addison_bot?start={opened['code']}"
+        assert service.listening_channels() == [channel.id]
+        assert _call(harness, "channel.status", {"id": channel.id}, 13)["state"] == "listening"
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_pair_a_phone_checks_an_unchecked_token_and_switches_the_channel_on(tmp_path):
+    """"Pair a phone" asks the transport who the token belongs to, through the call
+    "Check now" makes, and records the answer before the switch's checks read it.
+    A person who pasted a token and went straight to pairing is therefore not told
+    to press Check now, and the channel is switched on as the switch would do it.
+
+    Mutations: drop the ``present`` write in ``_channel_begin_pairing`` (the switch
+    refuses with its "Check now" sentence); pass the row read before the check to
+    ``_start_listening`` (the same); drop ``set_channel_enabled`` from
+    ``_start_listening`` (the row stays off)."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        _call(harness, "profile.set", {"profileId": "developer"}, 900)
+        harness.server._channel_service._adapters["telegram"] = TelegramAdapter(
+            client=httpx.Client(transport=httpx.MockTransport(telegram.handler))
+        )
+        _call(harness, "channel.add", {"kind": "telegram", "name": "My phone"}, 901)
+        row = _call(harness, "channel.list", {}, 902)["channels"][0]
+        assert (row["tokenPresent"], row["enabled"]) == ("unknown", False)
+
+        opened = _call(harness, "channel.beginPairing", {"id": row["id"]}, 903)
+        assert opened["ok"] is True and opened["link"].startswith("https://t.me/addison_bot?")
+        row = _call(harness, "channel.list", {}, 904)["channels"][0]
+        assert (row["tokenPresent"], row["enabled"]) == ("present", True)
+        assert harness.server._channel_service.listening_channels() == [row["id"]]
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+@pytest.mark.parametrize("cause", ["guard", "another_channel"])
+def test_pair_a_phone_refuses_with_the_switchs_own_reasons_and_opens_no_window(
+    tmp_path, cause
+):
+    """"Pair a phone" and the switch share one set of checks, so each refusal the
+    switch gives comes back from "Pair a phone" word for word. No window opens
+    after a refusal, because a code that nothing is listening for can never be
+    answered.
+
+    Mutation: ignore the refusal ``_start_listening`` returns — a window opens and a
+    code comes back in every case."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        service = harness.server._channel_service
+        if cause == "guard":
+            _call(harness, "profile.set", {"profileId": "custom"}, 20)
+            _call(
+                harness,
+                "guards.set",
+                {"destructiveCard": "per_invocation", "autoGrantScope": "none"},
+                21,
+            )
+            expected = _GUARDS_REFUSE_REMOTE
+        elif cause == "another_channel":
+            _call(harness, "channel.add", {"kind": "telegram", "name": "The tablet"}, 20)
+            rows = _call(harness, "channel.list", {}, 21)["channels"]
+            other = next(row["id"] for row in rows if row["name"] == "The tablet")
+            _call(harness, "channel.connect", {"id": other}, 22)
+            assert _call(harness, "channel.setEnabled", {"id": other, "enabled": True}, 23)["ok"]
+            expected = _ONE_AT_A_TIME.format(other="The tablet")
+        listening_before = service.listening_channels()
+
+        answer = _call(harness, "channel.beginPairing", {"id": channel.id}, 30)
+        assert answer == {"ok": False, "error": expected}
+        assert service.pending_pairing(channel.id) is None
+        assert service.listening_channels() == listening_before
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+@pytest.mark.parametrize("recorded", ["unknown", "absent"])
+@pytest.mark.parametrize("cause", ["unreachable", "keychain"])
+def test_pair_a_phone_whose_check_failed_says_so_unless_the_token_is_known(
+    tmp_path, recorded, cause
+):
+    """The check "Pair a phone" makes failed, because Telegram could not be reached or
+    the keychain read failed, and the token is not recorded as present. Addison does
+    not know whether a usable token is saved. A recorded ``absent`` is included,
+    because a new token may have been saved since the last check. The switch's own
+    answer would be "Press Check now, then switch it on", which makes no sense to
+    somebody who pressed "Pair a phone", so the person is told the check failed. No
+    window opens and nothing is recorded.
+
+    Mutations: remove the ``token_present != "present"`` branch from
+    ``_channel_begin_pairing`` (the switch's "Check now" or "no token" sentence
+    comes back); narrow it to ``== "unknown"`` (the ``absent`` cases fail)."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        conn = sqlite3.connect(harness.server.store.db_path)
+        conn.execute(
+            "UPDATE channels SET token_present = ? WHERE id = ?", (recorded, channel.id)
+        )
+        conn.commit()
+        conn.close()
+        if cause == "unreachable":
+            telegram.get_me_status = 502
+        else:
+
+            def unreadable(kind: str) -> str:
+                raise RuntimeError("the keychain did not answer")
+
+            harness.server._shell_bridge.get_channel_key = unreadable  # type: ignore[union-attr]
+
+        answer = _call(harness, "channel.beginPairing", {"id": channel.id}, 45)
+        assert answer == {"ok": False, "error": _CHECK_FAILED}
+        assert harness.server._channel_service.pending_pairing(channel.id) is None
+        assert harness.server._channel_service.listening_channels() == []
+        assert _call(harness, "channel.list", {}, 46)["channels"][0]["tokenPresent"] == recorded
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_pair_a_phone_with_no_token_saved_says_to_paste_one(tmp_path):
+    """The keychain answered that nothing is saved. "Try again in a moment" would
+    never help, so the answer is the sentence that says to paste a token. No request
+    is made, no loop starts and no window opens. Nothing is recorded, as with "Check
+    now", because saving the token later never tells the core, and an ``absent``
+    written here would outlive it.
+
+    Mutations: drop the ``ChannelNoToken`` branch from ``_channel_begin_pairing``
+    (pairing carries on and a code comes back); write ``absent`` in that branch
+    (the row no longer reads ``unknown``)."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        conn = sqlite3.connect(harness.server.store.db_path)
+        conn.execute(
+            "UPDATE channels SET token_present = 'unknown' WHERE id = ?", (channel.id,)
+        )
+        conn.commit()
+        conn.close()
+        harness.server._shell_bridge.token = ""  # type: ignore[union-attr]
+        answer = _call(harness, "channel.beginPairing", {"id": channel.id}, 47)
+        assert answer == {"ok": False, "error": _NO_TOKEN_SAVED}
+        assert telegram.requests == []
+        assert _call(harness, "channel.list", {}, 48)["channels"][0]["tokenPresent"] == "unknown"
+        assert harness.server._channel_service.pending_pairing(channel.id) is None
+        assert harness.server._channel_service.listening_channels() == []
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_pair_a_phone_without_reaching_telegram_gives_a_code_and_no_link(tmp_path):
+    """When ``getMe`` cannot be reached there is no handle, so there is no link.
+    Nothing is recorded about the token, because a failed check says nothing about
+    it. The person still gets a code to type, and the loop starts on the strength of
+    the earlier check.
+
+    Mutations: return the unreachable sentence instead of carrying on (no code
+    comes back); write ``absent`` on the way (the switch refuses)."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        telegram.get_me_status = 502
+        opened = _call(harness, "channel.beginPairing", {"id": channel.id}, 40)
+        assert opened["ok"] is True and len(opened["code"]) == 7
+        assert "link" not in opened
+        assert _call(harness, "channel.list", {}, 41)["channels"][0]["tokenPresent"] == "present"
+        assert harness.server._channel_service.listening_channels() == [channel.id]
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_pair_a_phone_with_a_rejected_token_says_so_and_opens_no_window(tmp_path):
+    """A rejected token is a definite answer about the credential, so it is recorded
+    and refused exactly as "Check now" records and refuses it. Nothing starts and
+    no window opens.
+
+    Mutations: drop the ``absent`` write (the row still says present); carry on past
+    the rejection (a code comes back)."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+        telegram.get_me_status = 401
+        answer = _call(harness, "channel.beginPairing", {"id": channel.id}, 50)
+        assert answer == {"ok": False, "error": TOKEN_REJECTED}
+        assert _call(harness, "channel.list", {}, 51)["channels"][0]["tokenPresent"] == "absent"
+        assert harness.server._channel_service.pending_pairing(channel.id) is None
+        assert harness.server._channel_service.listening_channels() == []
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)
+
+
+def test_a_keychain_that_cannot_be_read_does_not_stop_pairing(tmp_path):
+    """Asking for the handle is a convenience. When the keychain read itself fails,
+    which a dialog nobody answered can cause, pairing goes ahead without a link
+    instead of failing, and the loop's own keychain reads back off as they always
+    have.
+
+    Mutation: catch only ``ChannelError`` in step 2 — the keychain's exception
+    reaches the worker and the answer is an error frame."""
+    harness, telegram, provider = _turn_server(tmp_path)
+    try:
+        channel = _Channel(harness, telegram, provider)
+
+        def unreadable(kind: str) -> str:
+            raise RuntimeError("the keychain did not answer")
+
+        harness.server._shell_bridge.get_channel_key = unreadable  # type: ignore[union-attr]
+        frame = _any_answer(harness, "channel.beginPairing", {"id": channel.id}, 60)
+        assert "result" in frame, frame
+        assert frame["result"]["ok"] is True and "link" not in frame["result"]
+    finally:
+        harness.server._channel_service.stop_all()
+        _shutdown(harness.reader, harness.thread)

@@ -256,8 +256,8 @@ export const Method = {
   // command, the same way an API key does; the engine reads it at the moment of use
   // and never stores it. A row carries `tokenPresent` — "present" | "absent" |
   // "unknown" — which says whether a token is believed to be saved and never any
-  // part of one. In this phase it is always "unknown": deciding otherwise means
-  // asking Telegram, which is the next phase.
+  // part of one. It stays "unknown" until Addison asks Telegram about the token,
+  // which `connect` and `beginPairing` both do.
   //
   // `add` is refused outside the Developer profile. `list` and `remove` answer in
   // every profile, so a saved connection never disappears on a profile switch and
@@ -269,22 +269,32 @@ export const Method = {
   // can look something up on the web and do the maths from a phone, and that is the
   // whole of it.
   //
-  // `setEnabled` is the one control that makes a connection live, and it only ever
-  // listens for THIS session — nothing starts listening when the app opens. So a
-  // connection you switched on yesterday shows as off today until you switch it on
-  // again, and `status` is where the truth about listening comes from; the saved
-  // row only says what you last chose.
+  // Two calls start listening. `setEnabled` switches a connection on, and
+  // `beginPairing` starts listening when Addison was not listening. Either one
+  // listens for THIS session only, because nothing starts listening when the app
+  // opens. So a connection you switched on yesterday shows as off today until you
+  // switch it on again or pair a phone. `status` says whether Addison is listening,
+  // and the saved row says only what you last chose.
   ChannelList: "channel.list",
   ChannelAdd: "channel.add",
   ChannelRemove: "channel.remove",
   ChannelConnect: "channel.connect",
   ChannelSetEnabled: "channel.setEnabled",
   ChannelStatus: "channel.status",
-  // Pairing: Addison shows a code on THIS screen and you send it from your phone.
-  // The code is made up at the moment you ask for it, so nothing Addison has merely
-  // read could have written it down in advance. A message from a phone that is not
-  // paired is ignored in silence — a reply would tell a stranger somebody is home —
-  // and all you see of it is a count.
+  // Pairing. `beginPairing` {id} -> {ok, code, expiresAt, link?} | {ok:false, error}.
+  // Addison makes up a code at the moment you ask, so nothing Addison has merely read
+  // could have written it down in advance. Asking also starts listening when Addison
+  // was not listening, with the same checks as `setEnabled`. It is refused every
+  // time while the ask-first guard is on. Any refusal is {ok:false, error}, and no
+  // pairing window opens. `link` is the Telegram start link
+  // `https://t.me/<bot>?start=<code>`, present when the core learned the bot's name
+  // in the same call. The panel draws it as a QR code. You scan it with your phone
+  // and tap Start, and Telegram sends the code to Addison. Without a link you send
+  // the code to the bot yourself. The link contains the code, so nothing stores it.
+  // Pairing covers your Telegram account, so every device signed in to that account
+  // can message Addison. A message from an account that is not paired gets no reply,
+  // because a reply would tell a stranger that somebody is there. You see only a
+  // count of those messages.
   ChannelBeginPairing: "channel.beginPairing",
   ChannelCancelPairing: "channel.cancelPairing",
   ChannelPairings: "channel.pairings",
@@ -302,10 +312,16 @@ export const Method = {
   // answer is only offered on the Developer surface; choosing to decline works in
   // every profile, because it is the safer of the two.
   ChannelSetOnWake: "channel.setOnWake",
-  // Core -> this window. `stateChanged` re-renders the panel without polling;
-  // `remoteTurn` says a phone turn started or finished; `requestQueued` carries one
-  // new note. Deliberately NOT the streaming or activity channels: a phone turn's
-  // words must never appear inside the conversation on this screen.
+  // Core -> this window. `stateChanged` re-renders the panel without polling.
+  // `remoteTurn` {id, phase, summary?} says what happened on the phone side, and
+  // `phase` is one of "started", "answered", "declined", "refused", "failed",
+  // "paired", "already_paired" or "pairing_closed". "already_paired" means an
+  // account that was already paired scanned the live code, and "pairing_closed"
+  // means the window closed because it expired or three guesses at the code were
+  // wrong. The core has closed the pairing window by the time it sends either of
+  // those or "paired". `requestQueued` carries one new note. None of these use the
+  // streaming or activity channels, because a phone turn's words must never appear
+  // inside the conversation on this screen.
   ChannelStateChanged: "channel.stateChanged",
   ChannelRemoteTurn: "channel.remoteTurn",
   ChannelRequestQueued: "channel.requestQueued",

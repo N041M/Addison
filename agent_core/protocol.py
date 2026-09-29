@@ -392,11 +392,13 @@ class Method:
     # NO TOKEN RIDES THESE PAYLOADS, in either direction, ever. The bot token goes
     # from the webview straight to the OS keychain through the shell's own
     # `store_channel_key` command, and the core reads it at the moment of use
-    # (`keychain.getChannelKey`, below). A row carries `tokenPresent` — 'present' |
-    # 'absent' | 'unknown', the `provider_config.secret_presence` vocabulary — which
-    # says whether a token is BELIEVED to exist and never any part of one. In phase 1
-    # it is 'unknown' on every row and stays there: validating a token means asking
-    # Telegram, which is phase 2.
+    # (`keychain.getChannelKey`, below). A row carries `tokenPresent`, which is
+    # "present", "absent" or "unknown" (the `provider_config.secret_presence`
+    # vocabulary). It says whether a token is believed to be saved and never holds any
+    # part of one. It stays "unknown" until Addison asks the transport about the
+    # token, which `connect` and `beginPairing` both do. "present" means the transport
+    # accepted the token, and "absent" means it rejected one. An empty keychain
+    # changes nothing, because saving a token never tells the core.
     #
     # `add` is Developer-only (the `mcp.add` pattern, and channels are dev-only for
     # v1 by owner decision). `list` and `remove` answer in EVERY profile: saved
@@ -421,18 +423,30 @@ class Method:
     CHANNEL_CONNECT = "channel.connect"        # {id} -> {ok, connectedAs} | {ok:false, error}
     CHANNEL_SET_ENABLED = "channel.setEnabled"  # {id, enabled} -> {ok} | {ok:false, error}
     # {id} -> {state, connectedAs?, lastPollAt?, backoffSeconds, unknownSenders, error?}
-    # `state` is a CLOSED vocabulary (channel_service.py): "stopped" | "listening" |
-    # "backing_off" | "token_rejected" | "no_token". `unknownSenders` is the count of
-    # messages from senders that are not paired — the ONLY thing an unpaired message
-    # produces, because a reply is an oracle. `error` is one of Addison's own frozen
-    # sentences and NEVER a transport's error text.
+    # `state` is a closed vocabulary owned by channel_service.py. The values are
+    # "stopped", "listening", "backing_off", "token_rejected", "no_token" and
+    # "in_use". "in_use" means another program is reading the bot's messages, so
+    # the loop stopped. It is sent with no `error`, like "token_rejected", and the
+    # panel's status line is the only place its words live. `unknownSenders` counts
+    # messages from senders that are not paired. It is the only thing an unpaired
+    # message produces, because a reply
+    # would tell a stranger the bot is live. `error` is one of Addison's own frozen
+    # sentences and never a transport's error text.
     CHANNEL_STATUS = "channel.status"
     # Pairing: the desktop shows a code, the phone sends it. The code is minted at
     # the moment of asking (agent_core/channel_pairing.py, over automation_nonce), so
     # no observed content could have written it down in advance. The window lives in
     # memory on the service and is gone on restart — a pairing window is a moment,
     # not a setting.
-    CHANNEL_BEGIN_PAIRING = "channel.beginPairing"    # {id} -> {ok, code, expiresAt}
+    #
+    # beginPairing also starts listening when the channel is not listening, through
+    # the same checks as setEnabled {enabled: true}. It refuses under the ask-first
+    # guard every time, whether or not a loop is running. Every refusal comes back as
+    # {ok: false, error} with no window opened. `link` is the transport's start link
+    # carrying the code, which the desktop shows as a QR code. It is present only
+    # when the bot's handle was learned in the same call. It contains the code, so it
+    # is never persisted or logged and appears only in this response.
+    CHANNEL_BEGIN_PAIRING = "channel.beginPairing"  # {id} -> {ok, code, expiresAt, link?}
     CHANNEL_CANCEL_PAIRING = "channel.cancelPairing"  # {id} -> {ok}
     CHANNEL_PAIRINGS = "channel.pairings"             # {id} -> {pairings: [<pairing>]}
     # <pairing> = {id, label, pairedAt}. The transport's own id for the human is
@@ -466,6 +480,11 @@ class Method:
     # Core -> Webview notifications.
     CHANNEL_STATE_CHANGED = "channel.stateChanged"  # {id, state, error?}
     # {id, phase, summary?} — a phone turn started or finished, for the panel.
+    # `phase` is a closed vocabulary: "started", "answered", "failed", "refused",
+    # "declined", "paired" (a new pairing was made), "already_paired" (an account
+    # that was already paired scanned the live code, so the window closed with no
+    # new pairing) and "pairing_closed" (an expired or spent window closed with no
+    # pairing). The last three tell the desktop to leave the QR screen.
     # DELIBERATELY NOT `conversation.streamChunk` AND NOT `tool.activityUpdate`: both
     # of those are read by the frontend as belonging to the thread on screen, and a
     # phone turn's words appearing inside somebody's desktop conversation is the

@@ -6,7 +6,16 @@
 // mirrors useMcpServers, which is the surface this one is modelled on throughout.
 //
 // PHASE 2: A CONNECTION CAN NOW BE LIVE. `handleConnect` asks Telegram who the
-// saved token belongs to; `handleSetEnabled` starts or stops the listening.
+// saved token belongs to. `handleSetEnabled` starts or stops the listening.
+// `handleBeginPairing` checks the token too, and starts listening when Addison was
+// not listening.
+//
+// THE PAIRING WINDOW CLOSES ON THIS SCREEN WHENEVER THE CORE HAS CLOSED IT. A code
+// or QR code left up after that is one a person scans and then hears nothing back.
+// So the window closes at its deadline, when a status says Addison stopped
+// listening, when the engine's state is anything other than "ready", and when the
+// core reports that a phone paired, that the account was already paired, or that
+// the window closed.
 //
 // PHASE 3: THE DESK QUEUE. From a phone Addison can look things up and do the maths
 // — three read-only tools, a closed list the core owns — and everything else comes
@@ -60,6 +69,22 @@ interface UseChannelsArgs {
   connected: boolean;
 }
 
+/** The states in which Addison is listening. A status in any other state closes
+ * the pairing window for that connection, because the core closes its own window
+ * whenever the listening stops. */
+const LISTENING_STATES = new Set<string>(["listening", "backing_off"]);
+
+/** The remote-turn phases the core sends after it has closed the pairing window. */
+const PAIRING_ENDED_PHASES = new Set<string>(["paired", "already_paired", "pairing_closed"]);
+
+/** The phase the hook records when a pairing window closes at its deadline. It is
+ * the same phase the core sends when its window closes that way. */
+const PAIRING_CLOSED = "pairing_closed";
+
+/** The longest delay `setTimeout` holds. A longer one fires at once, so a deadline
+ * further away than this gets no timer. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 /** What the last phone turn did, for the one line the panel shows about it.
  *
  * DELIBERATELY NOT THE MESSAGE AND NOT THE ANSWER. A phone turn's words live in
@@ -90,7 +115,11 @@ export function useChannels({ connected }: UseChannelsArgs) {
   // The open pairing window, if there is one. AT MOST ONE at a time, which matches
   // the core (a second `beginPairing` replaces the first) and matches the fact that
   // v1 listens to one connection at a time.
-  const [pairing, setPairing] = useState<ChannelPairingWindow | null>(null);
+  const [pairing, setPairingState] = useState<ChannelPairingWindow | null>(null);
+  // The same window, for the notification handlers, which are subscribed once and
+  // need to know whether a window is open when a frame arrives. `setPairing` keeps
+  // the two in step.
+  const pairingRef = useRef<ChannelPairingWindow | null>(null);
   const [lastRemoteTurn, setLastRemoteTurn] = useState<RemoteTurnNote | null>(null);
   // The desk queue (phase 3): what a phone asked for that Addison only does at this
   // computer. Read from the core rather than remembered, like everything else here,
@@ -106,12 +135,31 @@ export function useChannels({ connected }: UseChannelsArgs) {
   const idsRef = useRef<string[]>([]);
   idsRef.current = channels.map((row) => row.id);
 
+  const setPairing = useCallback((next: ChannelPairingWindow | null) => {
+    pairingRef.current = next;
+    setPairingState(next);
+  }, []);
+
+  /** Close the pairing window when it belongs to `channelId`. Returns whether one
+   * was open, so a caller can tell a window that closed from one that never was. */
+  const closePairing = useCallback(
+    (channelId: string): boolean => {
+      if (pairingRef.current?.channelId !== channelId) return false;
+      setPairing(null);
+      return true;
+    },
+    [setPairing],
+  );
+
   const refreshStatuses = useCallback((ids: string[]) => {
     if (!isEngineConnected()) return;
     for (const id of ids) {
       ipc
         .channelStatus(id)
-        .then((status) => setStatuses((prev) => ({ ...prev, [id]: status })))
+        .then((status) => {
+          setStatuses((prev) => ({ ...prev, [id]: status }));
+          if (!LISTENING_STATES.has(status.state)) closePairing(id);
+        })
         .catch(() => {
           // Keep the last-known line rather than blanking it: a dropped answer is
           // not evidence that a connection stopped.
@@ -121,7 +169,7 @@ export function useChannels({ connected }: UseChannelsArgs) {
         .then((rows) => setPairings((prev) => ({ ...prev, [id]: rows })))
         .catch(() => {});
     }
-  }, []);
+  }, [closePairing]);
 
   const refreshRequests = useCallback(() => {
     if (!isEngineConnected()) return;
@@ -156,6 +204,10 @@ export function useChannels({ connected }: UseChannelsArgs) {
     // Every "ready" is a fresh engine — re-read, like the other data hooks. A fresh
     // engine is also listening to nothing, which the status re-read is what shows.
     const stopCoreState = subscribeCoreState((state) => {
+      // An engine that is restarting, stopped or failed cannot answer a pairing
+      // code, and the core keeps pairing windows in memory, so a restarted engine
+      // has none. The window closes without a line under the row.
+      if (state !== "ready") setPairing(null);
       if (state === "ready") {
         refreshChannels();
         // A fresh engine has an EMPTY queue — the notes live in memory on the core
@@ -166,11 +218,15 @@ export function useChannels({ connected }: UseChannelsArgs) {
       }
     });
     // The core says when a connection's state moves, so the panel re-renders
-    // without polling. Nothing here is authoritative: the frame carries the new
-    // state, and the status re-read is what fills in the rest.
+    // without polling. The status re-read is what fills in the line. A frame saying
+    // Addison stopped listening closes the pairing window straight away, because
+    // closing it is the safe direction whatever the re-read says.
     const stopState = subscribe(Method.ChannelStateChanged, (params) => {
       const id = typeof params.id === "string" ? params.id : null;
       if (!id) return;
+      if (typeof params.state === "string" && !LISTENING_STATES.has(params.state)) {
+        closePairing(id);
+      }
       refreshStatuses([id]);
     });
     // A phone turn started or finished. NOT the streaming or activity channels, on
@@ -179,9 +235,21 @@ export function useChannels({ connected }: UseChannelsArgs) {
     const stopTurn = subscribe(Method.ChannelRemoteTurn, (params) => {
       const id = typeof params.id === "string" ? params.id : null;
       if (!id) return;
+      const phase = typeof params.phase === "string" ? params.phase : "";
+      // The core has closed its pairing window, so the panel closes the code and
+      // the QR code as well.
+      if (PAIRING_ENDED_PHASES.has(phase)) {
+        const closed = closePairing(id);
+        // "That pairing code stopped working" is only true of a code this panel
+        // was showing. Without one there is nothing to say.
+        if (phase === PAIRING_CLOSED && !closed) {
+          refreshStatuses([id]);
+          return;
+        }
+      }
       setLastRemoteTurn({
         channelId: id,
-        phase: typeof params.phase === "string" ? params.phase : "",
+        phase,
         summary: typeof params.summary === "string" ? params.summary : undefined,
         at: Date.now(),
       });
@@ -202,7 +270,21 @@ export function useChannels({ connected }: UseChannelsArgs) {
       stopTurn();
       stopQueued();
     };
-  }, [connected, refreshChannels, refreshRequests, refreshStatuses]);
+  }, [connected, refreshChannels, refreshRequests, refreshStatuses, closePairing, setPairing]);
+
+  // The window closes at its deadline, and the line under the row says so. The
+  // timer belongs to one window. Replacing, cancelling or closing the window, or
+  // unmounting, clears it.
+  useEffect(() => {
+    if (!pairing || !(pairing.expiresAt > 0)) return;
+    const delay = pairing.expiresAt * 1000 - Date.now();
+    if (delay > MAX_TIMER_MS) return;
+    const timer = setTimeout(() => {
+      setPairing(null);
+      setLastRemoteTurn({ channelId: pairing.channelId, phase: PAIRING_CLOSED, at: Date.now() });
+    }, Math.max(0, delay));
+    return () => clearTimeout(timer);
+  }, [pairing, setPairing]);
 
   /** Save a connection. A refusal is a resolved {ok:false} carrying the core's plain
    * sentence, which we surface as one calm line — never a stack trace. Returns
@@ -287,11 +369,11 @@ export function useChannels({ connected }: UseChannelsArgs) {
 
   /** Save the bot token for a channel's transport, straight into the OS keychain.
    *
-   * The token goes to the Rust command and NOWHERE else: not into this hook's state,
-   * not into a core payload, not into the list this hook holds (G1). The list is
+   * The token goes to the Rust command and NOWHERE else. It is not put in this
+   * hook's state, in a core payload or in the list this hook holds (G1). The list is
    * re-read afterwards, because the row is the only thing that can report on a
-   * token — and it will still say "unknown" until somebody presses Check now, which
-   * is the only thing that can turn a saved token into a known one.
+   * token. The row still says "unknown" until Addison checks the token with
+   * Telegram, which happens when somebody presses Check now or Pair a phone.
    *
    * Returns whether it landed, so the panel can clear its field only on success. */
   const handleSaveToken = useCallback(
@@ -400,8 +482,16 @@ export function useChannels({ connected }: UseChannelsArgs) {
     [refreshChannels],
   );
 
-  /** Ask for a pairing code. It is shown on THIS screen and typed on the phone —
-   * the secret stays on the trusted surface and only the proof goes over the wire. */
+  /** Ask for a pairing code, and the Telegram start link that carries it when the
+   * core has one. Both are shown on THIS screen. The phone sends the code back,
+   * either by scanning the link and tapping Start or by typing it.
+   *
+   * Asking also checks the token and starts listening when Addison was not
+   * listening. The core records the token check and the switch on the saved row, so
+   * the list and the statuses are re-read afterwards, as `handleSetEnabled` does.
+   * That happens after a refusal too, because a rejected token changes the row as
+   * well. The core's `stateChanged` frame prompts a status re-read of its own, and
+   * this one covers a frame that never arrives. */
   const handleBeginPairing = useCallback(
     async (channel: Channel): Promise<void> => {
       setBusy(true);
@@ -414,6 +504,7 @@ export function useChannels({ connected }: UseChannelsArgs) {
             channelId: channel.id,
             code: res.code,
             expiresAt: res.expiresAt ?? 0,
+            link: res.link,
           });
         } else {
           setError(res.error ?? "Addison couldn't start pairing just now.");
@@ -422,9 +513,10 @@ export function useChannels({ connected }: UseChannelsArgs) {
         setError("Addison couldn't start pairing just now.");
       } finally {
         setBusy(false);
+        refreshChannels();
       }
     },
-    [],
+    [refreshChannels, setPairing],
   );
 
   const handleCancelPairing = useCallback(
@@ -437,7 +529,7 @@ export function useChannels({ connected }: UseChannelsArgs) {
       }
       refreshStatuses([channel.id]);
     },
-    [refreshStatuses],
+    [refreshStatuses, setPairing],
   );
 
   /** Revoke one paired phone. Answers in every profile — the whole control surface a

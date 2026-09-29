@@ -3,10 +3,10 @@
 Everything transport-specific sits behind this file, and nothing above it knows
 the word Telegram (docs/plans/messaging-channel-plan.md §3.2, which owns this design).
 
-FOUR VALUE TYPES, ONE PROTOCOL, THREE EXCEPTIONS. A ``Protocol`` rather than a
-base class, matching how ``Tool`` and ``ShellBridge`` are declared in
-``agent_core/tools/base.py``: an adapter is a shape somebody satisfies, not an
-inheritance chain to join.
+The file holds four value types, one protocol and four exceptions under one base
+class. The contract is a ``Protocol``, the way ``Tool`` and ``ShellBridge`` are
+declared in ``agent_core/tools/base.py``. An adapter only has to provide these
+methods and attributes, and it does not inherit from anything here.
 
 THE TEXT THAT ARRIVES IS SOMEBODY ELSE'S WRITING. ``InboundMessage.text`` and
 ``.sender_label`` are attacker-controlled — anyone who learns a bot's name can
@@ -64,6 +64,13 @@ class InboundMessage:
     #: only after the message has been handed on (§3.3: the offset IS the
     #: acknowledgement), which is what makes delivery at-least-once.
     update_id: str
+    #: True when the person opened the chat through the transport's start
+    #: affordance, such as a link or QR code that opens the bot and sends a start
+    #: command. ``text`` then carries only what the link carried, which may be
+    #: empty. The adapter is the only layer that recognises the command, so the
+    #: service and the turn can decide what a start means without knowing the
+    #: transport's spelling of it.
+    is_start: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,11 @@ class VerifiedIdentity:
     #: The bot's own display name — what the Settings row says it is connected AS.
     #: Text the TRANSPORT supplied, so it is cleaned and capped like any other.
     display_name: str
+    #: The transport's address for the bot, which ``pairing_link`` builds a link
+    #: from. None when the transport gave none or gave one that fails the
+    #: transport's own shape rule. The adapter validates it, so a value here is
+    #: safe to put in a link.
+    handle: str | None = None
 
 
 @dataclass(frozen=True)
@@ -115,8 +127,10 @@ class PollResult:
 
 # --- the failure vocabulary -------------------------------------------------
 #
-# One exception per outcome the SERVICE has a different answer for. Three, and no
-# more, because a fourth would be a distinction nothing above acts on.
+# One exception per outcome the service has a different answer for. There are
+# four. ``ChannelInUse`` is the newest, added when the poll loop needed to stop on a
+# conflict it had been retrying forever. An exception is added only when something
+# above the adapter acts on the distinction.
 
 
 class ChannelError(RuntimeError):
@@ -136,9 +150,28 @@ class ChannelUnavailable(ChannelError):
 
 
 class ChannelRefused(ChannelError):
-    """The transport said no to this specific send. Surfaced once, never retried in
-    a loop: the same message will be refused the same way, and a retry loop against
-    a refusal is how a rate limit becomes a ban."""
+    """The transport said no to this specific send. It is reported once and never
+    retried in a loop, because the same message would be refused the same way and a
+    retry loop against a refusal is how a rate limit becomes a ban."""
+
+
+class ChannelInUse(ChannelRefused):
+    """Another program is reading this bot's messages, so this one cannot.
+
+    On Telegram this is a webhook set on the bot or a second program polling the
+    same token. The poll loop that is currently running stops on it and reports
+    the state ``in_use``, and it does not retry. The fix is outside Addison. A
+    person has to remove the webhook, turn the other program off or make a new bot. A
+    loop that a person has just replaced can also receive one, because the
+    transport may end the older of two open polls this way. That loop returns
+    without recording anything (``ChannelService._poll_loop``).
+
+    It subclasses :class:`ChannelRefused` so that every existing
+    ``except ChannelRefused`` site keeps its meaning. On the send side a conflict
+    is one message that could not go, which is what a refusal already means
+    there. It carries ``SEND_REFUSED`` for the same reason, because the send side
+    is the only place its sentence could reach a person. The words for the stopped
+    state live once, in the panel's status line."""
 
 
 # --- plain sentences, frozen ------------------------------------------------
@@ -297,4 +330,16 @@ class ChannelAdapter(Protocol):
         IT MAY NEVER RAISE. A failed courtesy must not fail a turn — this is the one
         method in the contract whose every failure mode is "nothing visible
         happened"."""
+        ...
+
+    def pairing_link(self, handle: str | None, code: str) -> str | None:
+        """A link that opens the bot on a phone and sends it ``code`` as a start
+        message, or None when the transport has no such link or either input fails
+        the transport's shape rules.
+
+        The desktop shows the link as a QR code beside the pairing code. The link
+        contains the code, so it carries the code's rules. It is never persisted,
+        never logged and never put in a model's context, and the only place it
+        travels is the ``channel.beginPairing`` response. Pure, with no network
+        call and no state."""
         ...

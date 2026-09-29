@@ -801,7 +801,7 @@ sequenceDiagram
     participant ST as Store
     participant WV as Webview (Settings)
 
-    Note over CS: started ONLY by channel.setEnabled — a person's switch.<br/>Nothing starts a loop when the app opens.
+    Note over CS: started by channel.setEnabled or channel.beginPairing, both a person's act.<br/>Nothing starts a loop when the app opens.
     CS->>SH: keychain.getChannelKey {kind}
     Note over SH,CS: G1: read at the moment of use, held for one request,<br/>never stored, never logged, never in an exception
     SH-->>CS: token
@@ -815,6 +815,7 @@ sequenceDiagram
     WK->>ST: find_channel_pairing (channel, sender)
     Note over WK: an UNKNOWN sender ends here, in silence.<br/>A reply is an oracle, so only a counter moves.
     WK->>WK: arrived while asleep, or guards set to ask before everything
+    Note over WK: a paired account that opened the chat with a start<br/>(scanning the QR code again), or that typed the live code,<br/>gets the paired sentence and no model turn.<br/>If it carried the live code, the window closes and the desk hears already_paired.
     WK->>WK: mark_untrusted(text, verdict)
     WK->>ST: the channel's own conversation ("From your phone")
     WK->>ORC: run_turn(remote_conversation, surface = REMOTE, stream_to = None)

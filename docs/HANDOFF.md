@@ -63,14 +63,25 @@ real Telegram** — every test runs against `httpx.MockTransport` and Telegram's
 published limits. The pass needs the OWNER'S hands for one step: a bot token from
 @BotFather, pasted into Settings → "Your phone" by the owner themselves (it is a
 credential; the assistant never touches it). Then, in order: connect ("Check
-now" shows the bot's name), enable, pair a phone with the desktop-shown code, and
-check (a) a lookup and a calculation answer from the floor, (b) *"add a line to my
+now" shows the bot's name), then press "Pair a phone" and scan the QR code it shows
+with the phone's camera. Scanning opens the bot in Telegram, and tapping Start pairs
+the phone with no typing (added 2026-09-29; `messaging-channel-plan.md` §3.13).
+"Pair a phone" switches listening on by itself, so the switch does not need to be
+pressed first, and typing the code shown beside the QR code still works. Check that
+the phone gets the paired sentence and the desktop leaves the QR screen, that
+scanning again from the paired phone gets the same sentence and no answer from the
+model, and that after a restart, revoking the phone and pressing "Pair a phone" pairs
+it again without touching the switch.
+Then check (a) a lookup and a calculation answer from the floor, (b) *"add a line to my
 notes file"* comes back with the full refusal sentence AND the note appears under
 the panel's pending block without a manual refresh (the `channel.requestQueued`
 frame), (c) "Ask this here" lands the sentence in the desktop composer and the
 card appears only after Send, (d) Dismiss clears it, (e) the `on_wake` setting
 both ways (default declines a stale message; 'answer' answers it late), (f) the
-queue is empty after a restart. **Before believing anything on a live screen,
+queue is empty after a restart, and (g) if the owner is willing to set a webhook on
+the bot from another tool, the panel says another program is using the bot and
+listening stops, and after the webhook is removed "Pair a phone" or the switch starts
+it again. **Before believing anything on a live screen,
 prove the build from inside the page** — the webview-cache fossil trap below.
 
 **Then the queue behind it, in the order that pays best:**

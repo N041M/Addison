@@ -11,9 +11,10 @@ inside one of them. ``tests/test_module_boundaries.py`` asserts it.
 What lives here is everything transport-specific and nothing else:
 
   * ``adapter.py`` — the contract (``ChannelAdapter``), the four value types, the
-    three-word failure vocabulary, and the backoff a transport carries.
+    four failure exceptions, and the backoff a transport carries.
   * ``telegram.py`` — the first adapter, and the only file in the design that
-    knows a vendor's API shape.
+    knows a vendor's API shape. It is also the only file that knows Telegram's
+    ``/start`` command and its ``t.me`` links.
 
 Nothing above this package knows the word Telegram; nothing in it knows what a
 turn, a tool or a permission gate is. That split is what makes a second transport

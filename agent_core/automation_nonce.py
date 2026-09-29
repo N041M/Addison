@@ -32,9 +32,11 @@ travels core -> webview on the card event, and comes back as the typed answer on
 which is the entire thing this exists to prevent. The model's tool_result says
 granted or denied and nothing else.
 
-This module is PURE and holds no state: minting, normalising and comparing only. The
+This module is pure and holds no state. It mints, normalises, compares, and tells
+whether text has a code's shape (`could_be_code`, which only pairing calls). The
 attempt budget and the pending-request bookkeeping belong to the caller that owns the
-card round-trip (`main.py`), because they are per-request lifetime, not arithmetic.
+card round-trip (`main.py`). They last as long as one request, and this module keeps
+nothing between calls.
 =============================================================================
 """
 
@@ -101,6 +103,19 @@ def normalise(typed: object) -> str:
     return _SEPARATORS.sub("", typed).upper()
 
 
+def could_be_code(typed: object) -> bool:
+    """Whether ``typed``, once normalised, has the shape of a minted code: exactly
+    ``LENGTH`` characters, every one of them from ``ALPHABET``.
+
+    :func:`matches` compares normalised strings, so text that fails this can never
+    match a code :func:`mint` returned. The pairing window
+    (``agent_core/channel_pairing.py``) uses it to spend no attempt on ordinary
+    chat. It is the only caller. The arming ceremony in ``main.py`` does not call
+    it, so the arming budget still counts every wrong answer."""
+    normalised = normalise(typed)
+    return len(normalised) == LENGTH and all(char in ALPHABET for char in normalised)
+
+
 def matches(typed: object, expected: str) -> bool:
     """Whether ``typed`` is ``expected``, compared in constant time.
 
@@ -110,9 +125,17 @@ def matches(typed: object, expected: str) -> bool:
     and the wrong one is the sort of thing that gets copied into a place where it
     does matter.
 
+    Both sides are compared as UTF-8 bytes. ``compare_digest`` raises ``TypeError``
+    for a ``str`` holding any character outside ASCII, and people type those. A Czech
+    keyboard's unshifted 2, 3, 4, 7 and 9 keys give ě, š, č, ý and í, and a phone adds
+    emoji, smart apostrophes and zero-width spaces. Text like that never matches a
+    minted code, so this returns False, and the caller counts it as a wrong answer.
+
     An empty ``expected`` NEVER matches, whatever is typed. That is the case where a
     caller asks about a request it never minted a code for, and answering True to
     "does this match nothing" would arm on an empty string."""
     if not expected:
         return False
-    return hmac.compare_digest(normalise(typed), normalise(expected))
+    return hmac.compare_digest(
+        normalise(typed).encode("utf-8"), normalise(expected).encode("utf-8")
+    )

@@ -1718,11 +1718,14 @@ class Store:
     def set_channel_token_present(self, channel_id: str, presence: str) -> None:
         """Record whether a token is BELIEVED to exist for this channel.
 
-        The ``provider_config.secret_presence`` vocabulary — 'present' | 'absent' |
-        'unknown' — and never any part of a token (G1). Written after a
-        ``channel.connect`` has ASKED the transport, which is the only thing that
-        turns 'unknown' into an answer. Excluded from snapshot capture, so a restore
-        never claims a token the keychain may no longer hold."""
+        The values are the ``provider_config.secret_presence`` vocabulary:
+        'present', 'absent' and 'unknown'. The column never holds any part of a token
+        (G1). ``channel.connect`` and ``channel.beginPairing`` write it after asking
+        the transport, and they are the only writers that turn 'unknown' into an
+        answer. 'present' means the transport accepted the token, and 'absent' means
+        it rejected one. An empty keychain writes nothing, because saving a token
+        never tells the core. The column is excluded from snapshot capture, so a
+        restore never claims a token the keychain may no longer hold."""
         self._conn.execute(
             "UPDATE channels SET token_present = ? WHERE id = ?", (presence, channel_id)
         )

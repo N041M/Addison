@@ -567,7 +567,8 @@ erDiagram
     three-state record, `provider_config.secret_presence`'s vocabulary exactly: it
     says whether a token is *believed* to exist so a surface can render a list without
     a keychain touch, and it holds no part of one. It becomes anything but `unknown`
-    only when a transport has been ASKED (`channel.connect`).
+    only when a transport has been ASKED (`channel.connect`, or
+    `channel.beginPairing`, which asks the same way).
   - **`enabled` is the person's saved intent and never live truth.** Nothing starts a
     poll loop when the app opens, so a restored or remembered 1 means "the person had
     this on"; `channel.status` asks the service what is actually listening. It is

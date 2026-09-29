@@ -12,6 +12,170 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-29: pairing by QR code, and a stopped state for a bot another program reads
+
+[`messaging-channel-plan.md`](plans/messaging-channel-plan.md) §3.13 owns the design. This
+entry records why the change was made and what its mutation pass found.
+
+The owner connected a bot, switched it on, and no phone ever paired. Reading the code
+found four ways the flow failed with no message to the person.
+
+1. Nothing starts a poll loop when the app opens. After a restart the row said the
+   channel was on, no loop ran, and "Pair a phone" minted a code that nothing was
+   listening for.
+2. Telegram sends `/start` the first time anybody opens a bot. The turn offered it as
+   a code, so it spent one of the window's three attempts.
+3. A failed attempt is answered with silence. That is a deliberate owner decision,
+   because a reply tells a stranger the bot is live. This change keeps the silence and
+   makes a failed attempt much less likely instead.
+4. When a webhook is set on the bot or another program polls the same token, Telegram
+   answers `getUpdates` with 409. The adapter raised a refusal, the poll loop caught it
+   as an unknown error, and it backed off forever with "Telegram isn't answering" while
+   "Check now" kept succeeding.
+
+What shipped, on the core side:
+
+- The Telegram adapter translates the start command. `/start`, `/start <payload>` and
+  `/start@<bot> <payload>` arrive as an `InboundMessage` with `is_start` set and `text`
+  holding only the payload. Nothing above `channels/telegram.py` knows how Telegram
+  spells it.
+- `VerifiedIdentity.handle` carries the bot's username when it has a username's shape,
+  and `ChannelAdapter.pairing_link` builds `https://t.me/<bot>?start=<code>` from a
+  valid handle and a valid code. The desktop shows the link as a QR code. The link
+  contains the pairing code, so it follows the code's rules and appears only in the
+  `channel.beginPairing` response.
+- "Pair a phone" asks Telegram who the token belongs to, records the answer as "Check
+  now" does, starts listening through the switch's own checks when nothing is
+  listening, and returns the link beside the code. The checks moved into one helper,
+  `_start_listening`, which `channel.setEnabled` and `channel.beginPairing` both call.
+  When nobody has ever checked the token and the check "Pair a phone" makes fails,
+  the answer is "Addison couldn't check that connection just now" rather than the
+  switch's "Press Check now, then switch it on".
+- Only text that could be a code spends a pairing attempt. `channel_pairing.offer`
+  answers `WRONG` with the budget untouched when the normalised text is not six
+  characters from the code alphabet (`automation_nonce.could_be_code`). Such text can
+  never match, because `matches` compares normalised strings, so every possible guess
+  still costs one. Ordinary chat, a bare Start and the backlog Telegram hands over
+  when "Pair a phone" starts a stopped loop no longer use the window up. Only
+  `channel_pairing.py` calls the predicate, so the arming ceremony's budget is
+  unchanged.
+- A start carrying a code is offered exactly as a typed code is. A phone that is
+  already paired and opens the bot again gets the paired sentence and runs no model
+  turn. When it carries the live code, the window closes and the desk hears
+  `paired`. That check is `channel_pairing.confirms`, which spends no attempt.
+- A 409 raises `ChannelInUse`, a subclass of `ChannelRefused`. The poll loop stops on
+  it and the state becomes `in_use` with no error, which is how `token_rejected` is
+  reported. On the send side it is still one undelivered message.
+- A loop that a person stopped while its long poll was open now changes nothing on its
+  way out. Every exit from the loop asks whether the service still holds this loop's
+  stop event, and an old loop returns without writing a status, touching the shared
+  backoff or removing the new loop from `_stops` and `_threads`. Telegram answers the
+  older of two open polls with a 409, so a quick Stop and Start produces this case
+  every time. Without the rule, the new `in_use` branch would have stopped the new
+  loop, and the old code's backoff branch wrote "backing off" over the new loop's
+  status.
+
+What the build and its mutation pass found:
+
+- Fifty-one mutations were applied in a scratch copy, one per new or moved line, and
+  each turned its test red for the intended reason. None survived. One of them is
+  guarded by a test that already existed: moving the shape check above the compare
+  refuses the right code in fixtures whose code was never minted, and
+  `test_the_right_code_matches_however_it_was_typed` goes red.
+- The first round had a separate branch in the turn that counted a bare Start from a
+  stranger and returned without offering it. Once `offer` spent nothing on text that
+  cannot be a code, removing that branch no longer turned any test red, because the
+  general rule already did its job. The branch was deleted, and the bare-start test
+  is now held by the rule in `offer`.
+- The first draft of "Pair a phone" would have made a real network request from the
+  test suite. Two existing tests build a server with no keychain bridge, so the token
+  read returned an empty string, and `getMe` went to `api.telegram.org` with it.
+  `ChannelService.verify` now raises before any request when there is no token. A test
+  pins it.
+- An old loop whose poll succeeded after a Stop reset the shared backoff before it
+  noticed it had been stopped, and `channel.status` reads that backoff for the new
+  loop. The stop check now comes first.
+- The send side's token rejection is the one path that must keep stopping whichever
+  loop is running, because it has no loop of its own. A mutation that applied the
+  current-loop rule to it as well left the loop running on a rejected token, and a
+  test now holds that path.
+- The race test first read the thread map after the old loop had already replaced
+  itself, so it asserted against the new loop and waited ten seconds for nothing. The
+  harness now holds the old poll until the test has recorded which thread is old.
+- One existing test asserted that a wrong code produced no request at all. That stopped
+  being the right claim once pairing checks the token and starts the loop, so it now
+  asserts that nothing reaches a phone.
+
+- The paired sentence had an em-dash tail and now reads as three sentences. No test
+  pinned its words, because every test imports the constant.
+
+An independent review of the whole change found no way for a stranger to pair without
+the code. It found these, and the second round of fixes closed them.
+
+- **The code compare raised on text outside ASCII.** `automation_nonce.matches`
+  passed `str` values to `hmac.compare_digest`, which raises `TypeError` for any
+  character outside ASCII. A stranger's emoji or accented letter vanished inside the
+  turn's catch-all, uncounted. While a pairing window was open, a paired phone's
+  "/start it’s me" got no reply either, because its payload was compared against the
+  code. The
+  arming ceremony had the same fault before this change existed: a code typed on a
+  Czech keyboard, where the unshifted 2, 3, 4, 7 and 9 keys give ě, š, č, ý and í,
+  raised instead of costing an attempt. The owner is Czech. The compare now works on
+  UTF-8 bytes.
+- **A window outlived its loop, and the desk never heard a window close.**
+  `_stop_and_say` now closes an open window as `stop` does. When a message finds a
+  window expired or spent, the desk now hears `pairing_closed` and stops showing a
+  dead QR code. `_stop_and_say` also wrote the status after releasing its lock, so a
+  Start pressed in that instant could be overwritten, and it now writes it inside.
+- **A paired account that re-scanned the live code told the desk "a phone paired".**
+  It now sends `already_paired`.
+- **"No token saved" looked like "unreachable".** `verify` reported an empty keychain
+  as `ChannelUnavailable`, so "Pair a phone" said "try again in a moment" and "Check
+  now" said the service could not be reached. `verify` now raises `ChannelNoToken`,
+  and both methods say to paste a token. "Pair a phone" answers `_CHECK_FAILED`
+  after any other failed check whenever the token is not recorded as present,
+  including `absent`, because a new token may have been saved since.
+- **The ask-first guard was asked at pairing only when no loop was running.** Two
+  mutations survived the first suite: this one, and removing `re.DOTALL` from the start
+  pattern. The guard is now asked every time. The pattern now matches one line only,
+  so a paired person's message of several lines that begins with `/start` reaches the
+  model. Each survivor now has a test that turns red.
+- **Text and docs.** The paired sentence now says "Your account" because pairing binds
+  the account, and it no longer names the transport. The in-use sentence was removed,
+  because nothing showed it and the panel carries its own words. Several comments had
+  gone stale in this diff or named Telegram above the adapter, and the prose added
+  here was rewritten to the owner's plain style.
+
+The second round added 15 mutations to the pass, for 66 in all. Several were run
+against more than one test, which makes 76 runs, and each turned its test red for the
+intended reason.
+
+A regression review of the second round found two more, and a third round fixed them.
+
+- **The second round made `absent` stick.** It recorded `absent` when the keychain
+  was empty. Saving a token goes from the webview to the keychain through the shell
+  and never tells the core (G1), so nothing reset it. A person who pressed Check now
+  before pasting the token then saw "No token saved yet" beside "Token saved", and
+  Start listening refused. An empty keychain now records nothing, the row stays as it
+  was, and `absent` again means only that the transport rejected a token. Both
+  methods still say to paste a token.
+- **A paired account that typed the live code got a model turn.** The panel invites
+  a person to type the code as well as scan it. A paired account that typed it had
+  the code sent to the model as a question, and the desk kept the QR code up until
+  the deadline. That text now takes the same path as a start. The window closes, the
+  phone gets the paired sentence, the desk hears `already_paired`, and no turn runs.
+  Any other text from a paired sender, including a wrong code, still runs a turn and
+  spends nothing.
+
+After the third round the pass holds 68 mutations in 79 runs. The two that had
+asserted an `absent` write now assert that nothing is written, two cover the typed
+code, and every run turned red for the intended reason.
+
+Three things stay open, and [`KNOWN-GAPS.md`](KNOWN-GAPS.md) holds them. Opening the
+app still does not start listening. A wrong code-shaped message that waited at the
+transport before a window opened can still spend one of its attempts. A window can
+open just after its loop has stopped, when the loop's first poll fails at once.
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner

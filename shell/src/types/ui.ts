@@ -746,7 +746,10 @@ export type ChannelState =
   | "listening"
   | "backing_off"
   | "token_rejected"
-  | "no_token";
+  | "no_token"
+  // Telegram refused Addison because another program is using the same bot, so
+  // Addison stopped listening. Like "stopped", it is not listening.
+  | "in_use";
 
 /** The live picture of one connection, from `channel.status`. */
 export interface ChannelStatus {
@@ -805,12 +808,16 @@ export interface ChannelPendingRequest {
   whatWasAsked: string;
 }
 
-/** An open pairing window, from `channel.beginPairing`. The code is shown on THIS
- * screen and typed on the phone; it is never stored anywhere. */
+/** An open pairing window, from `channel.beginPairing`. The panel shows it on THIS
+ * screen and nothing stores it. */
 export interface ChannelPairingWindow {
   channelId: string;
   code: string;
   expiresAt: number;
+  /** The Telegram start link `https://t.me/<bot>?start=<code>`, which the panel
+   * draws as a QR code for the phone's camera. Absent when the core could not learn
+   * the bot's name, and the panel then shows the code on its own. */
+  link?: string;
 }
 
 /** The full profile picture from `profile.get`. */

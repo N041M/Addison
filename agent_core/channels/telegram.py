@@ -27,10 +27,19 @@ edit-per-delta design spends a rate budget nobody here can measure, rewrites a
 message under the reader's thumb, and adds a failure mode with no good recovery.
 So: the typing hint while the turn runs, then ONE message when the turn is done,
 split by the SERVICE at ``limits.max_message_chars``.
+
+This file is also the only one that knows Telegram's start links. A link of the
+form ``https://t.me/<bot>?start=<payload>`` opens the bot on a phone, and tapping
+Start sends the bot the message ``/start <payload>``. Pairing uses this so a person
+can scan a QR code on the desktop instead of typing the code.
+:meth:`TelegramAdapter.pairing_link` builds the link, and
+:meth:`TelegramAdapter._message_from` turns the start message back into its payload
+with ``is_start`` set.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -43,6 +52,7 @@ from agent_core.channels.adapter import (
     TRANSPORT_UNREACHABLE,
     Backoff,
     ChannelAuthFailed,
+    ChannelInUse,
     ChannelLimits,
     ChannelRefused,
     ChannelUnavailable,
@@ -92,6 +102,36 @@ _REQUEST_TIMEOUT_SECONDS = 15.0
 #: ``timeout`` is not cut off by the client one instant before it answers.
 _POLL_TIMEOUT_SLACK_SECONDS = 10.0
 
+#: Where a start link points. A constant for the same reason ``_API_ROOT`` is one:
+#: nothing a transport or a message says can move it.
+_LINK_ROOT = "https://t.me"
+
+#: The shape of a bot's username as ``getMe`` reports it: 5 to 32 characters of
+#: letters, digits and underscores, starting with a letter. A value that fails this
+#: is not put in a link, because the handle becomes part of a URL a phone opens.
+_USERNAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{4,31}")
+
+#: What a start link may carry: 1 to 64 characters from ``A-Z a-z 0-9 _ -``. The
+#: pairing code (``ABC-DEF``) fits. Both rules are taken from
+#: https://core.telegram.org/bots/features#deep-linking as quoted in the build brief
+#: of 2026-09-29, and this build did not re-read the page.
+_START_PAYLOAD = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+#: The message Telegram sends when a person taps Start, whether they opened the bot
+#: by name or through a start link. ``/start`` alone, ``/start <payload>``, and the
+#: group form ``/start@<botname> <payload>``, all on one line. Anything else is an
+#: ordinary message, including a message of several lines that begins with
+#: ``/start``. A paired person's ordinary message must reach the model, and a start
+#: link never carries a line break, so the pattern allows spaces and tabs before the
+#: payload and nothing that crosses a line.
+#:
+#: The bot name after ``@`` is not checked against this bot. That is harmless. For
+#: a sender who is not paired, the payload is offered exactly as a typed message
+#: is, so a start addressed to another bot can do nothing a typed code could not.
+#: For a paired sender, the only effect is the paired sentence in place of a model
+#: turn.
+_START_COMMAND = re.compile(r"/start(?:@[A-Za-z0-9_]+)?(?:[ \t]+(?P<payload>.*))?")
+
 
 class TelegramAdapter:
     """The Bot API, behind ``ChannelAdapter``.
@@ -126,7 +166,13 @@ class TelegramAdapter:
         # the bot); ``first_name`` is the fallback for a bot that somehow has none.
         # Both are the transport's text and are cleaned like any other.
         name = clean_untrusted_text(bot.get("username") or bot.get("first_name"), MAX_LABEL_CHARS)
-        return VerifiedIdentity(display_name=name)
+        # The handle is the same username, kept only when it has a username's shape.
+        # It is checked rather than cleaned because it becomes part of a link.
+        username = bot.get("username")
+        handle = (
+            username if isinstance(username, str) and _USERNAME.fullmatch(username) else None
+        )
+        return VerifiedIdentity(display_name=name, handle=handle)
 
     def poll(self, token: str, cursor: str | None, seconds: int) -> PollResult:
         """``getUpdates`` with ``offset`` and ``timeout``, filtered to message
@@ -221,11 +267,25 @@ class TelegramAdapter:
         except Exception:
             return
 
+    def pairing_link(self, handle: str | None, code: str) -> str | None:
+        """``https://t.me/<handle>?start=<code>``, or None when either part fails
+        Telegram's shape rules.
+
+        Opening the link on a phone opens the bot, and tapping Start sends the bot
+        ``/start <code>``, which :meth:`_message_from` turns back into the code.
+        Both parts are validated here even though ``verify_token`` already checked
+        the handle, because this method is where the URL is built."""
+        if not isinstance(handle, str) or _USERNAME.fullmatch(handle) is None:
+            return None
+        if not isinstance(code, str) or _START_PAYLOAD.fullmatch(code) is None:
+            return None
+        return f"{_LINK_ROOT}/{handle}?start={code}"
+
     # --- the one place a request is made -----------------------------------
 
     def _request(self, method: str, token: str, params: dict, *, timeout: float) -> dict:
-        """One Bot API call, with every failure translated into this design's three
-        words and one of Addison's own sentences.
+        """One Bot API call, with every failure translated into one of this
+        design's four exceptions and one of Addison's own sentences.
 
         NOTHING FROM httpx REACHES A CALLER. An ``httpx`` exception's ``str()``
         carries the request URL, and on this API the URL carries the bot token — so
@@ -233,9 +293,21 @@ class TelegramAdapter:
         the caller does with the message. Every ``raise`` below therefore names a
         frozen constant, and no ``from exc`` chain is kept for the same reason.
 
-        401/403 is the token; 4xx otherwise is this specific request being refused
-        (a chat the bot was blocked from, a message Telegram would not take); 5xx,
-        a timeout and a transport error are all "not right now"."""
+        A 401 or 403 means the token. Any other 4xx means this specific request was
+        refused, such as a chat that blocked the bot or a message Telegram would not
+        take. A 5xx, a timeout and a transport error all mean "not right now".
+
+        A 409 raises :class:`ChannelInUse`. Telegram sends it to ``getUpdates``
+        when a webhook is set on the bot or when another program is polling the same
+        token, and then it keeps coming until a person changes something outside
+        Addison. Telegram also sends it once to the older of two open polls, which
+        happens to Addison's own loop when a person presses Stop and then Start, and
+        that one passes. The poll loop tells them apart by asking whether it is still
+        the current loop. A current loop stops on the conflict, and a replaced loop
+        returns without recording anything. A 409 is therefore never retried as an
+        outage. "Check now" (``getMe``) still succeeds while the conflict lasts,
+        which is why the state says what is wrong instead of saying Telegram is not
+        answering."""
         url = f"{_API_ROOT}/bot{token}/{method}"
         client = self._client
         try:
@@ -254,6 +326,8 @@ class TelegramAdapter:
             # the one 4xx that retrying later genuinely fixes, and the backoff above
             # this is exactly the right response to it.
             raise ChannelUnavailable(TRANSPORT_UNREACHABLE)
+        if status == 409:
+            raise ChannelInUse(SEND_REFUSED)
         if status >= 400:
             raise ChannelRefused(SEND_REFUSED)
         try:
@@ -300,6 +374,16 @@ class TelegramAdapter:
         label = clean_untrusted_text(
             sender.get("username") or sender.get("first_name") or "", MAX_LABEL_CHARS
         )
+        # The start command is translated here, so nothing above this file needs to
+        # know how Telegram spells it. The command itself is dropped and ``text``
+        # keeps only the payload, which is the pairing code when the person scanned
+        # the desktop's QR code. A bare ``/start`` becomes an empty text with
+        # ``is_start`` set. It is kept rather than dropped for being empty, because a
+        # paired phone that opens the chat again is answered with the paired
+        # sentence.
+        start = _START_COMMAND.fullmatch(text)
+        if start is not None:
+            text = (start.group("payload") or "").strip()
         date = message.get("date")
         return InboundMessage(
             channel_id="",
@@ -312,4 +396,5 @@ class TelegramAdapter:
             received_at=0,
             sent_at=int(date) if isinstance(date, int) else 0,
             update_id=str(update.get("update_id", "")),
+            is_start=start is not None,
         )
