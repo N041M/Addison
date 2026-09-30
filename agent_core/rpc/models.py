@@ -111,12 +111,17 @@ class ModelsMixin(ServerContext):
         if self._providers_reconnected or self._connect_provider is None or self._store is None:
             return
         self._providers_reconnected = True
-        for cfg in self.store.list_provider_configs():
-            provider_id = cfg["provider_id"]
-            if provider_id == "anthropic" or not cfg["connected"]:
+        # Store.connected_provider_ids, so a provider that shows as connected in
+        # Settings also gets its models back. The base URL comes from the row, and a
+        # provider connected without a row never needs one (custom always has a row).
+        base_urls = {
+            cfg["provider_id"]: cfg["base_url"] for cfg in self.store.list_provider_configs()
+        }
+        for provider_id in sorted(self.store.connected_provider_ids()):
+            if provider_id == "anthropic":
                 continue
             try:
-                models = self._connect_provider(provider_id, cfg["base_url"])
+                models = self._connect_provider(provider_id, base_urls.get(provider_id))
             except Exception:
                 continue   # transient failure — user can reconnect manually
             self._set_provider_models(provider_id, models)

@@ -58,6 +58,9 @@ class Store:
     def _apply_schema(self) -> None:
         self._migrate_provider_config()
         self._migrate_tool_audit_outcomes()
+        observations_are_new = not self._conn.execute(
+            "PRAGMA table_info(provider_observations)"
+        ).fetchall()
         self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
         self._conn.commit()
         # Mode-scoped safety (owner decision 2026-07-19): add created_in_mode to
@@ -137,6 +140,18 @@ class Store:
             "continued_from_conversation_id",
             "TEXT REFERENCES conversations(id)",
         )
+        # KNOWN-BUGS 94. A database from before provider_observations has its latest
+        # key answers only in provider_config's excluded columns. They are copied
+        # once, when the table is created, so a restore that takes a row away right
+        # after the update still finds the key recorded as saved. Last, because a
+        # very old database gains those two columns only a few lines above.
+        if observations_are_new:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO provider_observations "
+                "(provider_id, secret_presence, key_rejected_at) "
+                "SELECT provider_id, secret_presence, key_rejected_at FROM provider_config"
+            )
+            self._conn.commit()
 
     def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
         cols = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -847,9 +862,15 @@ class Store:
         a key saved?" is learned on a different occasion than the answer to "did the
         connect ping pass", so a caller that only knows the second must not overwrite
         the first. A brand-new row with no presence supplied starts ``unknown`` — the
-        schema default, and the only safe one."""
+        schema default, and the only safe one.
+
+        A supplied presence is a live read, so it is also written to
+        ``provider_observations`` (KNOWN-BUGS 94). That entry is what still answers
+        if a restore later takes this row away while the key stays saved."""
         last_ok = None if last_check_ok is None else int(last_check_ok)
         presence = None if secret_presence is None else SecretPresence(secret_presence).value
+        if presence is not None:
+            self._observe_presence(provider_id, presence)
         self._conn.execute(
             "INSERT INTO provider_config "
             "(provider_id, connected, added_at, base_url, catalog_json, last_check_ok, "
@@ -881,53 +902,55 @@ class Store:
         """Write down what a live keychain read just proved about this provider's key
         (plan §4.1) — the ONLY way ``secret_presence`` becomes anything but ``unknown``.
 
-        Creates the row when there is none, and that row's ``connected`` mirrors
-        ``present``. That is not a new claim: ``provider.list`` already rendered "a key
-        is in the keychain, with no connection row" as connected, so that a legacy key
-        migrated from the pre-multi-provider account showed up without a re-connect.
-        This persists the same answer instead of re-asking the OS for it every time
-        something needs a dot drawn.
+        The answer always goes to ``provider_observations``, which no restore point
+        captures. When the provider has a ``provider_config`` row, the row's own
+        ``secret_presence`` gets the same answer, and that column is excluded from
+        capture too. Nothing else is written, so a message never changes the setup a
+        restore point records (KNOWN-BUGS 94).
+
+        Two writes this used to make are gone, and both changed captured state on the
+        first message after a restore. An existing row also got the captured
+        ``updated_at``, which nothing reads. A missing row was created, with
+        ``connected`` mirroring the answer, and a restore point without that row then
+        stopped matching the setup it had put back. The owner decided on 2026-09-30
+        that a key read never creates a row. ``connected_provider_ids`` reads the
+        observation instead, so a key saved with no row still shows as connected, which
+        is what the row used to do for a key migrated from the pre-multi-provider
+        account.
 
         An EXISTING row keeps its ``connected`` untouched: a real ``provider.connect``
         result outranks a presence read, which knows only that bytes are saved and
-        nothing at all about whether the provider accepts them.
-
-        For an existing row this writes ``secret_presence`` and nothing else, and in
-        particular not ``updated_at`` (KNOWN-BUGS 94). ``secret_presence`` is excluded
-        from snapshot capture and ``updated_at`` is captured. A restore resets the
-        presence to 'unknown', so the first message after every restore recorded it
-        again, and writing ``updated_at`` with it changed the captured setup. The
-        restore walk then no longer recognised the restore point it had landed on,
-        and the next press restored the newest working setup, which can be the broken
-        one. Nothing reads ``provider_config.updated_at``.
-
-        A MISSING row is still created, and that write is captured state. It is left
-        as it is because the row decides what Settings shows and whether the live
-        model list loads, so changing it is a product decision (KNOWN-BUGS 94)."""
+        nothing at all about whether the provider accepts them."""
         value = SecretPresence(presence).value
+        changed = self._observe_presence(provider_id, value)
         row = self._conn.execute(
             "SELECT secret_presence FROM provider_config WHERE provider_id = ?",
             (provider_id,),
         ).fetchone()
-        if row is not None:
-            if row["secret_presence"] == value:
-                return   # idempotent: nothing learned, nothing written
+        if row is not None and row["secret_presence"] != value:
             self._conn.execute(
                 "UPDATE provider_config SET secret_presence = ? WHERE provider_id = ?",
                 (value, provider_id),
             )
-        else:
-            self._conn.execute(
-                "INSERT INTO provider_config "
-                "(provider_id, connected, secret_presence, updated_at) VALUES (?, ?, ?, ?)",
-                (
-                    provider_id,
-                    int(presence is SecretPresence.PRESENT),
-                    value,
-                    int(time.time()),
-                ),
-            )
-        self._conn.commit()
+            changed = True
+        if changed:
+            self._conn.commit()
+
+    def _observe_presence(self, provider_id: str, value: str) -> bool:
+        """Put ``value`` in ``provider_observations`` for this provider. Returns whether
+        anything was written. Does not commit, so it joins the caller's write."""
+        row = self._conn.execute(
+            "SELECT secret_presence FROM provider_observations WHERE provider_id = ?",
+            (provider_id,),
+        ).fetchone()
+        if row is not None and row["secret_presence"] == value:
+            return False
+        self._conn.execute(
+            "INSERT INTO provider_observations (provider_id, secret_presence) VALUES (?, ?) "
+            "ON CONFLICT(provider_id) DO UPDATE SET secret_presence = excluded.secret_presence",
+            (provider_id, value),
+        )
+        return True
 
     def record_key_rejected(self, provider_id: str, at: int | None = None) -> bool:
         """This provider DEFINITIVELY rejected the saved key (plan §5.2). Returns
@@ -941,31 +964,25 @@ class Store:
         person's message to an external service while their key sits in the keychain
         (the 2026-07-25 bug — see ``secret_presence.py``).
 
-        A provider with no row at all gets one, ``connected = 0``: something reached
-        that provider with a key and was refused, which is worth recording even
-        where no connect ever completed. The new row's ``secret_presence`` takes the
-        schema default ``unknown`` — never ``absent``, for the reason above."""
+        The rejection always goes to ``provider_observations``, and to the row's own
+        ``key_rejected_at`` when the provider has a row. Both are excluded from
+        capture, for the reason ``record_secret_presence`` gives. A provider with no
+        row used to get a captured row with ``connected = 0`` here. It now gets an
+        observation only, whose ``secret_presence`` starts at the schema default
+        ``unknown``, never ``absent``, for the reason above (KNOWN-BUGS 94, owner
+        decision 2026-09-30)."""
         now = int(time.time()) if at is None else at
-        row = self._conn.execute(
-            "SELECT key_rejected_at FROM provider_config WHERE provider_id = ?",
-            (provider_id,),
-        ).fetchone()
-        if row is not None and row["key_rejected_at"] is not None:
+        if self.key_rejected_at(provider_id) is not None:
             return False   # already marked, already told — say nothing again
-        if row is not None:
-            # ``key_rejected_at`` only, for the reason ``record_secret_presence`` gives:
-            # it is excluded from capture, and a turn that also wrote the captured
-            # ``updated_at`` would change the setup the restore walk compares against.
-            self._conn.execute(
-                "UPDATE provider_config SET key_rejected_at = ? WHERE provider_id = ?",
-                (now, provider_id),
-            )
-        else:
-            self._conn.execute(
-                "INSERT INTO provider_config "
-                "(provider_id, connected, key_rejected_at, updated_at) VALUES (?, ?, ?, ?)",
-                (provider_id, 0, now, now),
-            )
+        self._conn.execute(
+            "UPDATE provider_config SET key_rejected_at = ? WHERE provider_id = ?",
+            (now, provider_id),
+        )
+        self._conn.execute(
+            "INSERT INTO provider_observations (provider_id, key_rejected_at) VALUES (?, ?) "
+            "ON CONFLICT(provider_id) DO UPDATE SET key_rejected_at = excluded.key_rejected_at",
+            (provider_id, now),
+        )
         self._conn.commit()
         return True
 
@@ -974,9 +991,15 @@ class Store:
         accepted (``provider.connect`` passed). Idempotent, and a no-op for a
         provider with no row. Deliberately NOT folded into
         ``upsert_provider_config``: the FAILING branches of connect call that too,
-        and a failed connect is no evidence that the revoked key was replaced."""
+        and a failed connect is no evidence that the revoked key was replaced.
+        Clears the observation as well as the row."""
         self._conn.execute(
             "UPDATE provider_config SET key_rejected_at = NULL "
+            "WHERE provider_id = ? AND key_rejected_at IS NOT NULL",
+            (provider_id,),
+        )
+        self._conn.execute(
+            "UPDATE provider_observations SET key_rejected_at = NULL "
             "WHERE provider_id = ? AND key_rejected_at IS NOT NULL",
             (provider_id,),
         )
@@ -984,18 +1007,29 @@ class Store:
 
     def key_rejected_at(self, provider_id: str) -> int | None:
         """When this provider last rejected the saved key, or None. Read by the
-        needs-attention state and by the idempotency check above."""
+        needs-attention state and by the idempotency check above. The provider's row
+        answers when there is one, and ``provider_observations`` otherwise."""
         row = self._conn.execute(
             "SELECT key_rejected_at FROM provider_config WHERE provider_id = ?",
             (provider_id,),
         ).fetchone()
-        return None if row is None else row["key_rejected_at"]
+        if row is not None:
+            return row["key_rejected_at"]
+        observed = self._conn.execute(
+            "SELECT key_rejected_at FROM provider_observations WHERE provider_id = ?",
+            (provider_id,),
+        ).fetchone()
+        return None if observed is None else observed["key_rejected_at"]
 
     def secret_presence(self, provider_id: str) -> SecretPresence:
         """Is a key saved for this provider? Answered from SQLite — NEVER by touching
         the OS keychain, which is the whole of plan §4.1.
 
-        A provider with no row at all is ``ABSENT``: Addison has never recorded a key
+        The provider's row answers when there is one. A provider with no row answers
+        from ``provider_observations``, which is where a key read records a key saved
+        with no row (KNOWN-BUGS 94).
+
+        A provider with neither is ``ABSENT``: Addison has never recorded a key
         for it, which is exactly the claim ``provider.list`` has always made by
         rendering it as not connected. That is a RECORDED state, not a stale or
         unreadable one — ``UNKNOWN`` is reserved for the two the plan names (a read
@@ -1006,8 +1040,40 @@ class Store:
             (provider_id,),
         ).fetchone()
         if row is None:
+            row = self._conn.execute(
+                "SELECT secret_presence FROM provider_observations WHERE provider_id = ?",
+                (provider_id,),
+            ).fetchone()
+        if row is None:
             return SecretPresence.ABSENT
         return SecretPresence.parse(row["secret_presence"])
+
+    def connected_provider_ids(self) -> set[str]:
+        """The providers that count as connected, and the one definition every reader
+        of "connected" uses: Settings, the connections panel, the model list kept
+        after a restore, the reconnect at launch, and the check for a provider other
+        than Anthropic.
+
+        A provider with a ``provider_config`` row is connected when its row says so,
+        which records whether ``provider.connect`` passed. A provider with no row is
+        connected when the latest key read recorded in ``provider_observations``
+        found a key saved. That covers a key saved without ever connecting, such as
+        one migrated from the pre-multi-provider account, and a key still saved after
+        a restore took the row away. The secrets plan §4.1 calls a restored setup
+        that claims fewer connections than exist the worse lie.
+
+        ``custom`` is never connected without its row, because its server address is
+        only in the row and there is nothing to connect to without it."""
+        rows = self._conn.execute(
+            "SELECT provider_id FROM provider_config WHERE connected = 1 "
+            "UNION "
+            "SELECT o.provider_id FROM provider_observations AS o "
+            "WHERE o.secret_presence = 'present' AND o.provider_id != 'custom' "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM provider_config AS c WHERE c.provider_id = o.provider_id"
+            ")"
+        ).fetchall()
+        return {row["provider_id"] for row in rows}
 
     def get_provider_config(self, provider_id: str) -> dict[str, Any] | None:
         """One provider's stored connection metadata, or None if never connected."""
@@ -1028,9 +1094,16 @@ class Store:
 
     def delete_provider_config(self, provider_id: str) -> None:
         """Forget a provider's connection metadata (the "Remove"/disconnect action).
-        The key itself is deleted separately by the Rust keychain command."""
+        The key itself is deleted separately by the Rust keychain command.
+
+        The provider's entry in ``provider_observations`` goes too. It records that a
+        key was saved, and the key is being deleted, so keeping it would show the
+        provider as connected again with no row."""
         self._conn.execute(
             "DELETE FROM provider_config WHERE provider_id = ?", (provider_id,)
+        )
+        self._conn.execute(
+            "DELETE FROM provider_observations WHERE provider_id = ?", (provider_id,)
         )
         self._conn.commit()
 
@@ -2289,7 +2362,8 @@ class Store:
         and nothing is inserted into it. A payload saved before that table joined
         capture has no entry for it, and ``snapshot_manager._decode_payload`` only
         lets through the shapes older builds wrote (``scope._PAYLOAD_TABLE_SETS``).
-        docs/SAFETY.md ("What is captured") owns why empty is the right answer.
+        The owner confirmed that rule on 2026-09-30, and docs/SAFETY.md ("What is
+        captured") owns why empty is the right answer.
 
         Raises ``sqlite3.Error`` on failure, after rolling back. The caller
         (SnapshotManager.restore) turns that into a plain-language

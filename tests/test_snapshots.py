@@ -30,6 +30,7 @@ import pytest
 
 from agent_core.memory import store as store_module
 from agent_core.memory.store import Store
+from agent_core.secret_presence import SecretPresence
 from agent_core.snapshots import snapshot_manager as sm
 from agent_core.snapshots.scope import (
     _CAPTURED_TABLES,
@@ -2199,16 +2200,20 @@ _ROW_BEFORE_A_COLUMN = {
 }
 
 
-def _a_row_of_each_kind(store: Store) -> None:
-    store.insert_routine(id="r1", name="Morning", description="Weather and diary",
-                         plan_json={"steps": []}, created_from_conversation_id=None,
-                         created_at=1_700_000_000)
-    store.insert_channel(id="c1", kind="telegram", name="My phone", created_at=1_700_000_000)
+def _rows_of_each_kind(store: Store, count: int) -> None:
+    """``count`` routines and ``count`` phone connections, ids r1, r2 and c1, c2."""
+    for number in range(1, count + 1):
+        store.insert_routine(id=f"r{number}", name=f"Morning {number}",
+                             description="Weather and diary", plan_json={"steps": []},
+                             created_from_conversation_id=None, created_at=1_700_000_000)
+        store.insert_channel(id=f"c{number}", kind="telegram", name=f"Phone {number}",
+                             created_at=1_700_000_000)
 
 
+@pytest.mark.parametrize("rows", [1, 2], ids=["one-row", "two-rows"])
 @pytest.mark.parametrize("shape", sorted(_ROW_BEFORE_A_COLUMN))
 def test_the_walk_keeps_its_place_on_a_restore_point_saved_before_a_column_joined(
-    store: Store, shape: str
+    store: Store, shape: str, rows: int
 ) -> None:
     """Found by the review of the fix for 16. The older restore point holds a row
     that has no key for a column added later. A restore fills in that column's
@@ -2219,10 +2224,11 @@ def test_the_walk_keeps_its_place_on_a_restore_point_saved_before_a_column_joine
 
     Mutations: take the entry out of ``_COLUMNS_JOINED_LATER``, or stop building the
     column images in ``_fingerprints``, and the third press restores the broken
-    setup."""
+    setup. In the two-row cases, taking the column out of the first row alone does
+    the same."""
     tables, without = _ROW_BEFORE_A_COLUMN[shape]
     clock = _Clock()
-    _a_row_of_each_kind(store)
+    _rows_of_each_kind(store, rows)
     older = _manager(_OlderBuild(store, tables, without), clock=clock)
     _add_skill(store, "A")
     older.mark_verified_working()
@@ -2275,8 +2281,9 @@ def test_a_turn_can_prove_a_permanent_restore_point_that_holds_a_routine_from_be
     assert row is not None and row.verified_working
 
 
+@pytest.mark.parametrize("rows", [1, 2], ids=["one-row", "two-rows"])
 def test_a_column_changed_since_the_restore_point_is_not_mistaken_for_its_default(
-    store: Store,
+    store: Store, rows: int
 ) -> None:
     """The column images are only sound when every row holds the value a restore
     fills in. Here the person switched the phone connection to answer while the
@@ -2284,26 +2291,78 @@ def test_a_column_changed_since_the_restore_point_is_not_mistaken_for_its_defaul
     Restoring the point puts back "decline", so it is a real change and the press has
     to make it.
 
-    Mutation: drop a column from the image whatever its value, and the restore
-    point counts as the running setup. The press then goes past it to the first
-    restore point."""
+    The two-connection case changes only the second connection, because a check that
+    looks at the first row alone would miss it.
+
+    Mutations: drop a column from the image whatever its value, or check the value in
+    the first row alone, and the restore point counts as the running setup. The press
+    then goes past it to the first restore point."""
     clock = _Clock()
-    store.insert_channel(id="c1", kind="telegram", name="My phone", created_at=1_700_000_000)
+    _rows_of_each_kind(store, rows)
     older = _manager(_OlderBuild(store, tuple(_CAPTURED_TABLES), (("channels", "on_wake"),)),
                      clock=clock)
     _add_skill(store, "A")
     older.mark_verified_working()
 
     manager = _manager(store, created_the_database=False, clock=clock)
-    store.set_channel_on_wake("c1", "answer")
+    store.set_channel_on_wake(f"c{rows}", "answer")
     manager.mark_verified_working()
 
     result = manager.restore_last_working()
 
     assert result.ok, result.error
     assert _skill_names(store) == ["A"]
-    (channel,) = store.list_channels()
-    assert channel["on_wake"] == "decline"
+    assert [channel["on_wake"] for channel in store.list_channels()] == ["decline"] * rows
+
+
+def test_a_keyless_install_walks_back_past_restore_points_from_before_key_reads(
+    store: Store,
+) -> None:
+    """Found by the second review of the fix for 16. No build before 2026-08-06
+    recorded a key read, so a keyless install's restore points from 2026-07-20 to
+    2026-08-05 have no Anthropic ``provider_config`` row, the permanent first one
+    included. Every message after the update read the key and created that row,
+    with ``connected = 0``. After the walk landed on one of those restore points, the
+    next message made the setup differ from it again, and the walk went round
+    between the newer setups without ever reaching the oldest.
+
+    Here every press is followed by a message, which on this install records that no
+    key is saved. The walk has to reach the first restore point and then say there
+    is nothing further back.
+
+    Mutation: let ``record_secret_presence`` insert a ``provider_config`` row again and
+    the second press restores A and B once more instead of A."""
+    clock = _Clock()
+    older = _manager(_OlderBuild(store, _OLDER_BUILDS["before-tool-servers"]), clock=clock)
+    _add_skill(store, "A")
+    older.mark_verified_working()
+    _add_skill(store, "B")
+    older.mark_verified_working()
+
+    manager = _manager(store, created_the_database=False, clock=clock)
+
+    def a_message() -> None:
+        """What a message on a keyless install does to the store. The key read
+        records that no key is saved. The answered turn then marks the setup as
+        working."""
+        store.record_secret_presence("anthropic", SecretPresence.ABSENT)
+        manager.mark_verified_working()
+
+    _add_skill(store, "Broken")
+    a_message()
+
+    landed: list[list[str]] = []
+    for _press in range(3):
+        result = manager.restore_last_working()
+        assert result.ok, result.error
+        landed.append(_skill_names(store))
+        a_message()
+
+    assert landed == [["A", "B"], ["A"], []]
+    assert store.get_provider_config("anthropic") is None
+    bottom = manager.restore_last_working()
+    assert bottom.ok is False
+    assert bottom.error == sm._AT_THE_BOTTOM
 
 
 def _two_older_working_setups(store: Store, clock: _Clock, **kwargs) -> SnapshotManager:

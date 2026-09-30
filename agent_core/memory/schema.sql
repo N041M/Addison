@@ -316,6 +316,31 @@ CREATE TABLE IF NOT EXISTS provider_config (
     key_rejected_at INTEGER,
     updated_at      INTEGER NOT NULL
 );
+
+-- What the latest live key read and the latest key rejection proved about each
+-- provider, kept OUTSIDE snapshot capture (snapshots/scope.py). KNOWN-BUGS 94, owner
+-- decision 2026-09-30.
+--
+-- Every message to the main cloud model reads whether its key is saved, and a
+-- provider can refuse a key during any turn. Those answers used to create a
+-- provider_config row when there was none, and provider_config is captured. A
+-- message on a restore point without the row then changed the captured setup, the
+-- restore walk no longer recognised where it had landed, and the next press restored
+-- the broken setup. A turn now writes its answers here and never creates a row.
+--
+-- Every live read writes here: the per-message read and the read provider.connect
+-- makes. The provider's row gets the same answer in its own excluded columns when it
+-- has a row, and readers use the row first. This table is what answers when a restore
+-- has taken the row away while the key is still saved, so a restored setup never
+-- claims fewer connections than exist (secrets plan §4.1). provider.disconnect
+-- deletes the entry with the row, because the key is deleted with it.
+CREATE TABLE IF NOT EXISTS provider_observations (
+    provider_id     TEXT PRIMARY KEY
+                        CHECK(provider_id IN ('anthropic','openai','google','custom')),
+    secret_presence TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK(secret_presence IN ('present','absent','unknown')),
+    key_rejected_at INTEGER
+);
 -- Multi-provider (owner decision 2026-07-18): several providers can be connected
 -- at once — anthropic + openai + google + a custom server — and the picker shows
 -- every connected provider's models together. See §4.1.1 (ModelRouter).

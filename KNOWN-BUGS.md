@@ -56,9 +56,12 @@ others are struck.
     answered "You're back at the oldest setup Addison saved". All six rows restored
     by id. With the `3497faf^` database file wrecked, master answered that there was
     no saved restore point to rebuild from while six sat beside it, and the branch
-    rebuilt from them. A payload that lacks a later table now restores that table
-    as empty, and [`docs/SAFETY.md`](docs/SAFETY.md) ("What is captured") owns that
-    rule.
+    rebuilt from them. Those presses had no message between them, because the stdio
+    harness has no model to answer one. The suite covers a message after every press
+    in `test_the_one_action_restore_walks_back_through_restore_points_from_before_an_update`
+    and, for a keyless install, in entry 94's tests. A payload that lacks a later
+    table now restores that table as empty. The owner confirmed that rule on
+    2026-09-30, and [`docs/SAFETY.md`](docs/SAFETY.md) ("What is captured") owns it.
     The fix also had to make an older restore point's fingerprint comparable with
     the running setup. Without that, the walk lost its place after landing on one
     and the next press went forward into the broken setup. The review of the fix
@@ -133,34 +136,36 @@ others are struck.
     that PR merges and the check above has been re-run.
     `shell/src/App.tsx` (`normalizePermission`)
 
-94. **After a restore and one message, the next restore press brings back the
-    setup the person was escaping.** The one-action restore remembers where it
-    landed by comparing the running setup with that restore point. Every message
-    that goes to the main cloud model records whether its key is saved
-    (`_primary_key_status` → `Store.record_secret_presence`). A restore resets the
-    excluded `secret_presence` column to "unknown", so the first message after it
-    always updates the `provider_config` row, and that update also writes the
-    captured `updated_at`. When the row is missing, the message inserts a whole
-    captured row instead. Either way the running setup no longer matches the
-    restore point, the walk forgets its place, and the next press restores the
-    newest working setup, which can be the broken one. Reproduced by the review of
-    the fix for 16 with the real `Store` and the call a message makes. Added
-    2026-09-30, after the hunt.
-    **Half fixed on branch `claude/fix-restore-old-snapshots`, 2026-09-30.** When
-    the row exists, recording presence now writes `secret_presence` and nothing
-    else, and recording or clearing a rejected key writes `key_rejected_at` and
-    nothing else. The review's repro passes on the branch, and a new test drives the
-    server through a restore, the key read and proof a message makes, and a second
-    press that now goes further back. The missing-row half is still open and waits
-    for an owner decision. A fresh install's first restore point never has an
-    Anthropic row, because the first message creates it. So a broken change, one
-    message, a press that lands on the first restore point, another message and a
-    second press restore the broken setup. Not creating the row would leave Settings
-    showing Anthropic as not connected, and the live model list not loaded, while
-    turns still use the key. The secrets plan §4.1 calls a restored setup that
-    claims fewer connections than exist the worse lie.
-    `agent_core/memory/store.py` (`record_secret_presence`) ·
-    `agent_core/snapshots/snapshot_manager.py`
+94. ~~**After a restore and one message, the next restore press brings back the
+    setup the person was escaping.**~~ **RE-RUN GREEN 2026-09-30**, on branch
+    `claude/fix-restore-old-snapshots`. The one-action restore remembers where it
+    landed by comparing the running setup with that restore point, and every message
+    to the main cloud model recorded its key read in captured state. When the
+    Anthropic `provider_config` row existed, the message wrote the captured
+    `updated_at` beside the excluded `secret_presence`. When the row was missing, the
+    message created it. The missing-row case was wider than first written. No build
+    before 2026-08-06 recorded a key read, so a keyless install's restore points from
+    2026-07-20 to 2026-08-05 have no Anthropic row, the permanent first one included,
+    and those are the points the fix for 16 made readable again. After the walk
+    landed on one, the next message created the row again, and with a message after
+    every press the walk went round the newer setups without reaching the oldest. A
+    new install's first restore point has no row either.
+    The owner decided on 2026-09-30 that a turn never writes captured state. Key
+    reads and key rejections now go to `provider_observations`, which no restore
+    point captures, and to the excluded columns of the provider's row when it has
+    one. A provider with no row counts as connected when its latest key read found a
+    key saved, so Settings still shows a key saved without a row as connected.
+    The re-run: the review's repro (`test_r4_presence_drift.py`) and the missing-row
+    repro both pass on the branch. The keyless walk with a message after every press
+    landed on A and B, then A, then the first restore point, and then answered that
+    there was nothing further back. On the pushed head `e4b0fa9` the same test landed
+    on A and B, then A, B and Broken, then A and B. Databases from `3497faf^` and
+    from `e4b0fa9`, each holding a connected Anthropic row, were opened over stdio.
+    Both builds before this change showed Anthropic as not connected after the walk
+    reached the first restore point. The branch created `provider_observations`,
+    filled it from the row, and kept Anthropic connected through every press.
+    `agent_core/memory/store.py` (`record_secret_presence`, `record_key_rejected`,
+    `connected_provider_ids`) · `agent_core/memory/schema.sql` (`provider_observations`)
 
 95. **Running a routine after a restore sends the next restore press forward.**
     A routine run writes `run_count` and `last_run_at` (`touch_routine_run_stats`),

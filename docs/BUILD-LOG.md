@@ -12,6 +12,46 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-30 (third): a turn never writes captured state
+
+KNOWN-BUGS 94, second half, and two owner decisions of 2026-09-30. The owner
+confirmed that a table a restore point lacks restores as empty (the rule from the fix
+for 16, which [`SAFETY.md`](SAFETY.md) owns). The owner also decided that presence for a
+provider with no `provider_config` row is kept outside captured state, while Settings
+and every presence read still consult it.
+
+**The missing row was wider than the entry first said.** The second review of 16
+found that no build before 2026-08-06 recorded a key read. A keyless install's
+restore points from 2026-07-20 to 2026-08-05 therefore have no Anthropic row, and
+every message after the update created one with `connected = 0`. With a message after
+every press, the walk went round the newer setups and never reached the oldest. The
+Settings argument recorded against dropping the row never applied to those installs,
+because the row a message created for them already said not connected.
+
+**What was built.** `provider_observations` holds the latest key read and key
+rejection for each provider, and `snapshots/scope.py` excludes it. Every live read
+writes it: the per-message read, the read `provider.connect` makes, and a rejection.
+The provider's row gets the same answer in its own excluded columns when it has one.
+A turn never creates a `provider_config` row. `Store.connected_provider_ids` is now the
+one definition of connected. A row answers for its provider, a provider with no row is
+connected when its observation records a key saved, and `custom` needs its row for the
+address. Settings, the connections panel, the models kept after a restore, the
+reconnect at launch and the check for a provider other than Anthropic all read it, so
+a restore that takes a row away never leaves the setup claiming fewer connections
+than exist (secrets plan §4.1). A database from before the table has it filled from
+`provider_config` when the table is created.
+
+**Two mutations the second review found surviving now fail.** The column tests had
+one row per table, so checking the default on the first row alone, or removing the
+column from the first row alone, passed. Both column tests now also run with two
+rows.
+
+**What remains.** Every routine run writes the captured `run_count` and
+`last_run_at`, so running a routine after a restore still ends the walk. That is
+KNOWN-BUGS 95.
+
+---
+
 ## What shipped 09-30 (second): a key read no longer moves the restore walk, when the row exists
 
 KNOWN-BUGS 94. Recording what a key read proved (`record_secret_presence`) and
@@ -20,20 +60,16 @@ recording or clearing a rejected key used to write the captured
 resets `secret_presence`, so the first message after every restore changed the
 captured setup, and the next press restored the newest working setup. Those three
 writes now touch only their own column. Nothing reads `provider_config.updated_at`.
-Creating a missing row to record presence is still captured state, and it is still
-open because the row decides what Settings shows. The entry states the choice.
-A search for other writes to captured tables that are not a configuration change
-found two more. `record_key_rejected` still creates a row when a provider with no
-row rejects a key. Every routine run writes the captured `run_count` and
-`last_run_at`, so running a routine after a restore also ends the walk.
+Creating a missing row to record presence was still captured state, and the third
+09-30 entry above closes it.
 
 ---
 
 ## What shipped 09-30: restore points from before an update can be restored again
 
 This fixes KNOWN-BUGS 16, and [`SAFETY.md`](SAFETY.md) ("What is captured") owns the
-rule that a table a payload lacks restores as empty. What belongs here is what the
-fix and its review found.
+rule that a table a payload lacks restores as empty. The owner confirmed that rule on
+2026-09-30. What belongs here is what the fix and its review found.
 
 **The decoder required every captured table, and a test asserted that it did.**
 `mcp_servers`, `automations` and `channels` joined capture after restore points

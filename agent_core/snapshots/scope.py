@@ -77,8 +77,9 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
 # unreadable, including the permanent first one.
 #
 # A payload that lacks a later table restores that table as empty
-# (Store.apply_config_state). docs/SAFETY.md ("What is captured") owns that rule,
-# including what it does to each of the three tables.
+# (Store.apply_config_state). The owner confirmed that rule on 2026-09-30.
+# docs/SAFETY.md ("What is captured") owns it, including what it does to each of the
+# three tables.
 #
 # The decoder accepts a payload only when its tables are exactly one of the sets a
 # build has written (_PAYLOAD_TABLE_SETS). It refuses a payload that lacks one of the
@@ -163,6 +164,13 @@ _EXCLUDED_TABLES: dict[str, str] = {
     # evidence somebody is rolling back BECAUSE of. The likeliest reason to restore
     # after a provider goes wrong is the provider going wrong.
     "provider_attempts": "failure history; a restore must never rewrite what happened",
+    # KNOWN-BUGS 94, owner decision 2026-09-30, on the `secret_presence` reasoning.
+    # A live key read and a key rejection are observations, and a turn writes them.
+    # Kept here, a turn never changes captured state, so the restore walk still
+    # recognises the restore point it landed on. A restore leaves them alone, so a
+    # key that is still saved keeps its provider showing as connected after a
+    # restore takes the provider's row away.
+    "provider_observations": "what a key read or a rejected key proved, written by turns",
     # Step 6 half A, on the `memory_facts` precedent. `widgets` IS captured — the
     # spec is configuration — but what the person has since DONE with one (a ticked
     # box, an edited note, a paused timer) is their content, not their setup.

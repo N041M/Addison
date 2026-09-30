@@ -233,8 +233,8 @@ def _fingerprints(tables: dict) -> frozenset[str]:
     history, and an image is only added when the conditions above hold. Dropping a
     table that has rows, or a column whose value differs from what a restore fills
     in, would describe a restore point that does not hold this configuration. The
-    walk would then skip a restore point that changes something, or stay below one it
-    had left.
+    walk would then treat that restore point as the setup already running, even
+    though restoring it would change something.
 
     Comparing against ``_fingerprint(tables)`` alone made every older restore point
     look different from the setup it would put back. After the walk landed on one,
