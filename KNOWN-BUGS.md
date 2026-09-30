@@ -91,12 +91,22 @@ others are struck.
     `agent_core/providers/tool_names.py` ·
     `agent_core/providers/{anthropic,openai,google}_provider.py`
 
-19. **GPT-5, GPT-5 mini, o3 and o4-mini fail every message.** The OpenAI adapter
-    always sends `max_tokens: 4096`. OpenAI refuses `max_tokens` on its reasoning
-    models and asks for `max_completion_tokens`, which appears nowhere in the
-    tree. `gpt-5` is the curated default for an OpenAI key. GPT-4.1 and GPT-4o
-    are unaffected.
-    `agent_core/providers/openai_provider.py` (`send`)
+19. ~~**GPT-5, GPT-5 mini, o3 and o4-mini fail every message.**~~ **RE-RUN GREEN
+    2026-09-30** on branch `claude/fix-provider-requests`. The re-run checked the
+    exact request body Addison sends against OpenAI's published Chat Completions
+    reference. Nothing was sent to OpenAI, so the fix has not been observed live.
+    GPT-5, GPT-5 mini, o3, o4-mini, GPT-4.1 and GPT-4o on the official API are now
+    sent `max_completion_tokens: 4096` and no `max_tokens`, on the plain and the
+    streamed path. The reference deprecates `max_tokens` for every model, so the
+    field does not depend on the model. A custom OpenAI-compatible server is still
+    sent `max_tokens: 4096`, because Ollama's list of supported fields does not
+    include the newer one. The adapter picks the field from its own base URL. The
+    rest of the request was checked too. The adapter sends no parameter the
+    reference marks as unsupported on reasoning models. Whether those models
+    accept the `system` role is unverified, and
+    [`docs/KNOWN-GAPS.md`](docs/KNOWN-GAPS.md) records it. The tests are at the
+    end of `tests/test_openai_provider.py`.
+    `agent_core/providers/openai_provider.py` (`send`, `_OFFICIAL_TOKEN_LIMIT_FIELD`)
 
 20. **"Run a model on this computer" never finishes on screen.** The window shows
     the model as ready the moment the download starts, then shows "setting up…"

@@ -12,6 +12,33 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-30 (second): the OpenAI output cap goes out under the field OpenAI reads
+
+KNOWN-BUGS 19. The OpenAI adapter sent `max_tokens: 4096` on every request. OpenAI's
+Chat Completions reference says `max_tokens` is deprecated in favour of
+`max_completion_tokens` and is not compatible with its reasoning models, so GPT-5,
+GPT-5 mini, o3 and o4-mini refused every message. GPT-5 is the default model for an
+OpenAI key.
+
+- **The field follows the endpoint.** The adapter serves the official API and every
+  custom OpenAI-compatible server. It compares its own base URL with the official
+  address and sends `max_completion_tokens` there and `max_tokens` everywhere else.
+  The orchestrator is unchanged and never asks which kind of provider it holds.
+- **The official API gets the new field for every model.** The reference deprecates
+  `max_tokens` for all models, so GPT-4.1 and GPT-4o are sent
+  `max_completion_tokens` as well. A test pins that, so choosing the field by model
+  name fails it.
+- **A custom server keeps `max_tokens`.** Ollama's published list of supported
+  fields has `max_tokens` and does not have `max_completion_tokens`.
+- **The rest of the request was checked against the same reference.** The adapter
+  sends no parameter the reference marks as unsupported on reasoning models. Two
+  things the check raised went to [KNOWN-GAPS](KNOWN-GAPS.md), under the bug hunt of
+  2026-09-29. One is whether the reasoning models accept the `system` role, which
+  the reference recommends replacing and does not say is refused. The other is
+  whether 4,096 tokens is enough room when reasoning counts against it.
+
+---
+
 ## What shipped 09-30: tool-server tools reach the cloud models under names they accept
 
 KNOWN-BUGS 18. A tool server's tools have ids of the form `mcp:<server name>:<tool>`.

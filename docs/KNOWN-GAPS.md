@@ -1327,6 +1327,19 @@ need a decision rather than a fix.
   custom server gets no rank and sorts ahead of every ranked cloud model in
   quality-first. An unranked model listed by a cloud provider gets 80 and sorts last.
   The same model behind a proxy lands first one way and last the other.
+- **How much room a reasoning model gets on OpenAI.** Since KNOWN-BUGS 19 was
+  fixed, the OpenAI adapter sends `max_completion_tokens: 4096`, and OpenAI counts
+  reasoning tokens against that number as well as the answer. OpenAI's reasoning
+  guide recommends reserving at least 25,000 tokens when starting out with these
+  models. With 4,096 a long reasoning pass can end with `length` and little or no
+  visible text. A larger cap changes what one message can cost, so the number is
+  the owner's decision.
+- **Whether OpenAI's reasoning models accept the `system` role.** The OpenAI adapter
+  sends Addison's prompt as a `system` message. OpenAI's Chat Completions reference
+  says "With o1 models and newer, use `developer` messages for this purpose
+  instead." and does not say that `system` is refused. One live turn on GPT-5 or o3
+  settles it. If `system` is refused, the adapter should send `developer` on the
+  official API only, since custom servers may not know that role.
 - **Falling forward after a preamble.** Once a round has streamed any text, a later
   round that fails without showing anything does not move to a sibling model on the
   same provider, and the turn fails. The comment says a stream that died before

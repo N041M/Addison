@@ -52,6 +52,30 @@ from agent_core.providers.tool_names import tool_id_for, wire_name, wire_names
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 _MAX_TOKENS = 4096
+#: The field that carries ``_MAX_TOKENS`` on the official API (KNOWN-BUGS 19).
+#: OpenAI's Chat Completions reference describes ``max_completion_tokens`` as "An
+#: upper bound for the number of tokens that can be generated for a completion,
+#: including visible output tokens and reasoning tokens." It says of ``max_tokens``:
+#: "This value is now deprecated in favor of `max_completion_tokens`, and is not
+#: compatible with o-series models." Source:
+#: https://platform.openai.com/docs/api-reference/chat/create, read 2026-09-30 from
+#: the published OpenAPI file at https://github.com/openai/openai-openapi. While this
+#: adapter sent ``max_tokens``, GPT-5, GPT-5 mini, o3 and o4-mini refused every
+#: message.
+#:
+#: The rest of the request was checked against the same reference. It marks
+#: ``stop`` as "Not supported with latest reasoning models `o3` and `o4-mini`", and
+#: this adapter never sends ``stop``, ``temperature``, ``top_p``, a penalty,
+#: ``logprobs``, ``logit_bias`` or ``n``. It says of the ``system`` role "With o1
+#: models and newer, use `developer` messages for this purpose instead." It does
+#: not say that a system message is refused, so this adapter still sends
+#: ``system``. That has not been checked against the live API.
+_OFFICIAL_TOKEN_LIMIT_FIELD = "max_completion_tokens"
+#: The field a custom OpenAI-compatible server gets. Ollama's list of supported
+#: request fields names ``max_tokens`` and does not name ``max_completion_tokens``
+#: (https://github.com/ollama/ollama/blob/main/docs/api/openai-compatibility.mdx,
+#: read 2026-09-30). A custom server therefore keeps ``max_tokens``.
+_COMPATIBLE_TOKEN_LIMIT_FIELD = "max_tokens"
 _TIMEOUT_SECONDS = 60.0
 # The validating GET's own budget + hop limits (list_models). Short: it runs on a
 # connect card the person is waiting on, so it gives up quickly.
@@ -133,6 +157,17 @@ class OpenAIProvider:
         # Names the service in plain-language network errors ("Couldn't reach OpenAI"
         # / "Couldn't reach the server").
         self._service_label = service_label
+        # Which field carries the output cap. Decided from the endpoint this
+        # instance talks to, which the adapter already knows, so the orchestrator
+        # never has to ask what kind of provider it holds. The official address is
+        # a module constant, the same one ``list_models`` compares against. A custom
+        # server that happens to be configured with that address is the official
+        # API and gets the official field.
+        self._token_limit_field = (
+            _OFFICIAL_TOKEN_LIMIT_FIELD
+            if self._base_url == _DEFAULT_BASE_URL
+            else _COMPATIBLE_TOKEN_LIMIT_FIELD
+        )
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -143,7 +178,7 @@ class OpenAIProvider:
             supports_streaming=True,
             runs_off_device=False,
             vision=True,        # modern GPT-class models can analyze images
-            # chat.completions says "length" when the answer hit ``max_tokens``,
+            # chat.completions says "length" when the answer hit its output cap,
             # and both response paths below keep that word as it arrived. The same
             # adapter serves the custom OpenAI-compatible server (a different base
             # URL and label, one class), so a compatible server that reports the
@@ -165,7 +200,7 @@ class OpenAIProvider:
 
         body: dict = {
             "model": self._model,
-            "max_tokens": _MAX_TOKENS,
+            self._token_limit_field: _MAX_TOKENS,
             "messages": _translate_history(messages),
         }
         # The table from wire name back to tool id, for mapping the reply. Built
