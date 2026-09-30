@@ -362,3 +362,108 @@ def test_a_tool_round_is_still_reported_as_a_tool_round():
     )
     res = provider.send([Message(role="user", content="read a.txt")], [])
     assert res.finish_reason == "tool_use"
+
+
+# --- which field carries the output cap (KNOWN-BUGS 19) ---------------------
+# OpenAI's Chat Completions reference deprecates ``max_tokens`` in favour of
+# ``max_completion_tokens`` and says ``max_tokens`` "is not compatible with o-series
+# models". GPT-5, GPT-5 mini, o3 and o4-mini refused every message while the
+# adapter sent ``max_tokens``. A custom OpenAI-compatible server keeps
+# ``max_tokens``, because Ollama's list of supported fields does not include the
+# newer one. The sources are quoted at ``_OFFICIAL_TOKEN_LIMIT_FIELD`` in
+# ``openai_provider.py``. These tests assert the whole request body.
+
+
+def _send_and_capture(model: str, *, stream: bool = False, **kwargs) -> tuple[str, dict]:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request.read()
+        seen.append(request)
+        if stream:
+            return httpx.Response(
+                200,
+                content=b'data: {"choices": [{"delta": {"content": "ok"}, '
+                b'"finish_reason": "stop"}]}\n\n',
+            )
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenAIProvider(
+        model=model, api_key_getter=lambda: "sk-test", client=client, **kwargs
+    )
+    provider.send(
+        [Message(role="user", content="hi")],
+        [],
+        on_delta=(lambda piece: None) if stream else None,
+    )
+    (request,) = seen
+    return str(request.url), json.loads(request.content)
+
+
+@pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "o3", "o4-mini"])
+def test_a_reasoning_model_on_the_official_api_is_sent_max_completion_tokens(model):
+    """This is the request that failed every time. Mutation: put ``"max_tokens"``
+    back as the body key in ``send`` and this fails."""
+    url, body = _send_and_capture(model)
+    assert url == "https://api.openai.com/v1/chat/completions"
+    assert body == {
+        "model": model,
+        "max_completion_tokens": 4096,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+
+def test_the_streamed_request_carries_the_same_field():
+    """The streaming path copies the body and adds its own two keys. Mutation: put
+    ``"max_tokens"`` back as the body key in ``send`` and this fails too."""
+    _, body = _send_and_capture("gpt-5", stream=True)
+    assert body == {
+        "model": "gpt-5",
+        "max_completion_tokens": 4096,
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+
+@pytest.mark.parametrize("model", ["gpt-4.1", "gpt-4o"])
+def test_a_non_reasoning_model_on_the_official_api_gets_the_same_field(model):
+    """The reference deprecates ``max_tokens`` for every model, so the official API
+    gets one field whatever the model. Mutation: choose the field from the model
+    name (for example only for ``gpt-5`` and the ``o`` series) and this fails."""
+    _, body = _send_and_capture(model)
+    assert body == {
+        "model": model,
+        "max_completion_tokens": 4096,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+
+def test_the_official_address_written_with_a_trailing_slash_is_still_official():
+    _, body = _send_and_capture("gpt-5", base_url="https://api.openai.com/v1/")
+    assert "max_completion_tokens" in body
+    assert "max_tokens" not in body
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "streamed"])
+def test_a_custom_server_keeps_max_tokens(stream):
+    """A custom OpenAI-compatible server, such as Ollama or LM Studio, is sent the
+    older field. Mutation: send ``max_completion_tokens`` to every endpoint and this
+    fails."""
+    url, body = _send_and_capture(
+        "llama3.1:8b",
+        stream=stream,
+        base_url="http://127.0.0.1:11434/v1",
+        require_key=False,
+        service_label="the server",
+    )
+    assert url == "http://127.0.0.1:11434/v1/chat/completions"
+    expected = {
+        "model": "llama3.1:8b",
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    if stream:
+        expected |= {"stream": True, "stream_options": {"include_usage": True}}
+    assert body == expected

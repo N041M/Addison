@@ -73,26 +73,44 @@ others are struck.
     **Reproduced by the coordinator.**
     `agent_core/orchestrator.py` (`_run_with_fallback`, `_FALLBACK_BUDGET_SECONDS`)
 
-18. **Once a tool server is checked, every Developer message fails on Anthropic and
-    OpenAI.** Tool ids are `mcp:<server name>:<tool>`, and all three cloud
-    adapters send the id verbatim as the tool's name. Anthropic and OpenAI only
-    accept `^[a-zA-Z0-9_-]{1,64}$`. A colon and a space are both outside that. The
-    tool list goes out on every request, so each message is refused with "The
-    request to … failed (status 400)" and the router does not fall forward on a
-    rejected request. Gemini accepts the colon and refuses the space. Running a
-    server named "github" and one named "My Files" through `McpCatalog` and the
-    adapters' `_translate_tools` gives `mcp:github:list_issues` and
-    `mcp:My Files:search`, and neither matches. No test sends an MCP tool through
-    an adapter. **Reproduced by the coordinator.**
-    `agent_core/mcp_catalog.py` (`mcp_tool_id`) ·
-    `agent_core/providers/{anthropic,openai,google}_provider.py` (`_translate_tools`)
+18. ~~**Once a tool server is checked, every Developer message fails on Anthropic and
+    OpenAI.**~~ **RE-RUN GREEN 2026-09-30** on branch `claude/fix-provider-requests`.
+    The re-run checked the exact bytes Addison sends against the vendors' published
+    schemas. Nothing was sent to a real vendor, so the fix has not been observed
+    live. The repro now gives `mcp_github_list_issues_e6c0c66752e2` and
+    `mcp_My_Files_search_d50bbb32890b` from all three adapters, and both match
+    every vendor's rule. A server named "Team: My Files" goes out as
+    `mcp_Team__My_Files_search_b284687477d6` in the tool list and in every replayed
+    call, and a reply naming it comes back as `mcp:Team: My Files:search`. A turn
+    through the real orchestrator and the Anthropic adapter, against a fake Messages
+    API and a fake tool server, called the tool and replayed the call under the same
+    name. The tool id itself is unchanged. The new
+    `agent_core/providers/tool_names.py` builds the name at the adapter boundary
+    and maps it back, and its docstring quotes each vendor's rule with its source.
+    `tests/test_tool_wire_names.py` holds the tests.
+    `agent_core/providers/tool_names.py` ·
+    `agent_core/providers/{anthropic,openai,google}_provider.py`
 
-19. **GPT-5, GPT-5 mini, o3 and o4-mini fail every message.** The OpenAI adapter
-    always sends `max_tokens: 4096`. OpenAI refuses `max_tokens` on its reasoning
-    models and asks for `max_completion_tokens`, which appears nowhere in the
-    tree. `gpt-5` is the curated default for an OpenAI key. GPT-4.1 and GPT-4o
-    are unaffected.
-    `agent_core/providers/openai_provider.py` (`send`)
+19. ~~**GPT-5, GPT-5 mini, o3 and o4-mini fail every message.**~~ **RE-RUN GREEN
+    2026-09-30** on branch `claude/fix-provider-requests`. The re-run checked the
+    exact request body Addison sends against OpenAI's published Chat Completions
+    reference. Nothing was sent to OpenAI, so the fix has not been observed live.
+    GPT-5, GPT-5 mini, o3, o4-mini, GPT-4.1 and GPT-4o on the official API are now
+    sent `max_completion_tokens: 4096` and no `max_tokens`, on the plain and the
+    streamed path. The reference deprecates `max_tokens` for every model, so the
+    field does not depend on the model. A custom OpenAI-compatible server is still
+    sent `max_tokens: 4096`, because Ollama's list of supported fields does not
+    include the newer one. The adapter picks the field from its own base URL. The
+    adapter never sends `stop`, which the reference marks as unsupported on o3 and
+    o4-mini, and never sends `temperature`, `top_p`, a penalty, `logprobs`,
+    `logit_bias` or `n`. Whether every newer model accepts `tools` on Chat
+    Completions was not checked, and the Unconfirmed list below has it. The
+    adapter still sends the `system` role. Microsoft's Azure reasoning guide says
+    these models treat a system message as a developer message. Whether 4,096
+    tokens is enough once reasoning counts against it is an owner question in
+    [`docs/KNOWN-GAPS.md`](docs/KNOWN-GAPS.md). The tests are at the end of
+    `tests/test_openai_provider.py`.
+    `agent_core/providers/openai_provider.py` (`send`, `_OFFICIAL_TOKEN_LIMIT_FIELD`)
 
 20. **"Run a model on this computer" never finishes on screen.** The window shows
     the model as ready the moment the download starts, then shows "setting up…"

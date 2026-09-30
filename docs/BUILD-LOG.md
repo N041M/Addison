@@ -12,6 +12,83 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-30 (second): the OpenAI output cap goes out under the field OpenAI reads
+
+KNOWN-BUGS 19. The OpenAI adapter sent `max_tokens: 4096` on every request. OpenAI's
+Chat Completions reference says `max_tokens` is deprecated in favour of
+`max_completion_tokens` and is not compatible with its reasoning models, so GPT-5,
+GPT-5 mini, o3 and o4-mini refused every message. GPT-5 is the default model for an
+OpenAI key.
+
+- **The field follows the endpoint.** The adapter serves the official API and every
+  custom OpenAI-compatible server. It compares its own base URL with the official
+  address and sends `max_completion_tokens` there and `max_tokens` everywhere else.
+  The orchestrator is unchanged and never asks which kind of provider it holds.
+- **The official API gets the new field for every model.** The reference deprecates
+  `max_tokens` for all models, so GPT-4.1 and GPT-4o are sent
+  `max_completion_tokens` as well. A test pins that, so choosing the field by model
+  name fails it.
+- **A custom server keeps `max_tokens`.** Ollama's published list of supported
+  fields has `max_tokens` and does not have `max_completion_tokens`.
+- **What else was checked.** The adapter never sends `stop`, which the reference
+  marks as unsupported on o3 and o4-mini. It never sends `temperature`, `top_p`, a
+  penalty, `logprobs`, `logit_bias` or `n` either. Whether every newer model accepts
+  `tools` on Chat Completions was not checked, and the register lists it as
+  unconfirmed. Microsoft's Azure reasoning guide says these models treat a `system`
+  message as a developer message, so the adapter keeps sending `system`.
+- **What the fix leaves open.** `max_completion_tokens` counts reasoning tokens, and
+  the adapter still allows 4,096. The review of the fix showed a reasoning pass that
+  uses all of it ending with no visible text. The cap, and whether Addison's effort
+  setting should reach OpenAI, are an owner question in
+  [KNOWN-GAPS](KNOWN-GAPS.md) under the bug hunt of 2026-09-29.
+
+---
+
+## What shipped 09-30: tool-server tools reach the cloud models under names they accept
+
+KNOWN-BUGS 18. A tool server's tools have ids of the form `mcp:<server name>:<tool>`.
+The three cloud adapters sent the id as the tool's name, and Anthropic and OpenAI
+refuse a colon or a space in a name. One checked tool server made every Developer
+message on those two vendors fail with status 400.
+
+- **The fix translates at the adapter boundary.** `agent_core/providers/tool_names.py`
+  maps a tool id to a name that follows the strictest of the three vendors' rules,
+  and maps a name in the reply back to the id. The id is stored in `tool_audit`,
+  grants and routines, and it did not change. The module docstring quotes each
+  vendor's rule with its source.
+- **A valid id goes out unchanged.** Every built-in tool name is byte-identical on
+  the wire. Any other id has its illegal characters replaced, is cut to fit, and
+  ends with 12 hex digits of the SHA-256 of the whole original id. Two ids that
+  differ only in a replaced character, or only after the cut, still get different
+  names.
+- **The name is the same on every request.** Past calls are replayed under it, so
+  it cannot depend on anything but the id. A test pins literal names, which a
+  per-process salted `hash()` would fail.
+- **A collision is refused before anything is sent.** Two different ids can still
+  get the same hash suffix. `wire_names` checks the tools each request offers. When
+  two of them share a name, the adapter sends nothing and the person is told to
+  remove one tool server in Settings.
+- **Past calls are in the table too.** A tool can be registered and not offered,
+  for example a tool-server tool after a switch from Developer to Simple in the
+  middle of a chat, or a tool outside the phone's list on a phone turn. The model
+  can still name it from the replayed history. The first version mapped only the
+  offered tools back, so such a call reached dispatch under its wire name and was
+  refused and recorded as an unknown tool. The table now holds the replayed calls'
+  ids as well, so the dev-only and phone refusals run and `tool_audit` records the
+  real id. The review of the fix found this. SAFE invariant 1 held before and after
+  the change.
+- **Gemini needed it too.** Its reference allows a colon in a declared function
+  name and does not allow one in `functionCall.name` or `functionResponse.name`,
+  and the adapter replays both.
+- **What still sends ids unchanged.** The Ollama adapter and the setup relay send
+  tool ids as they are. Neither has a published rule that refuses them. The
+  long-chat summary call sends no tools, and routines never call a provider.
+- `tests/test_tool_wire_names.py` asserts the request body of each adapter, plain
+  and streamed, and runs one real turn on the Anthropic adapter against a fake
+  tool server. Each mutation named in its docstrings turns its test red.
+
+---
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner

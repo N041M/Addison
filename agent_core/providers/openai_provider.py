@@ -17,6 +17,12 @@ provider, is never proxied through the webview.
 Note the module-boundary rule (CLAUDE.md §2): ``providers/`` must not import from
 ``tools/``. Tool definitions are duck-typed — send() only reads ``.id``,
 ``.description`` and ``.parameters_schema`` off each tool.
+
+A tool id goes out under ``tool_names.wire_name(id)``, in the tool list and in
+every replayed ``tool_calls`` entry, because Chat Completions refuses a function
+name with a colon or a space in it. A tool call in the reply is mapped back to the
+id before it leaves this module (KNOWN-BUGS 18). A custom server gets the same
+names. They follow OpenAI's rule, so a server that copies OpenAI's API accepts them.
 """
 
 from __future__ import annotations
@@ -42,9 +48,45 @@ from agent_core.providers.base import (
     open_stream,
     request_with_retry,
 )
+from agent_core.providers.tool_names import (
+    replayed_tool_ids,
+    tool_id_for,
+    wire_name,
+    wire_names,
+)
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 _MAX_TOKENS = 4096
+#: The field that carries ``_MAX_TOKENS`` on the official API (KNOWN-BUGS 19).
+#: OpenAI's Chat Completions reference describes ``max_completion_tokens`` as "An
+#: upper bound for the number of tokens that can be generated for a completion,
+#: including visible output tokens and reasoning tokens." It says of ``max_tokens``:
+#: "This value is now deprecated in favor of `max_completion_tokens`, and is not
+#: compatible with o-series models." Source:
+#: https://platform.openai.com/docs/api-reference/chat/create, read 2026-09-30 from
+#: the published OpenAPI file at https://github.com/openai/openai-openapi. While this
+#: adapter sent ``max_tokens``, GPT-5, GPT-5 mini, o3 and o4-mini refused every
+#: message.
+#:
+#: The same reference marks ``stop`` as "Not supported with latest reasoning models
+#: `o3` and `o4-mini`". This adapter never sends ``stop``, ``temperature``,
+#: ``top_p``, a penalty, ``logprobs``, ``logit_bias`` or ``n``. It sends ``tools``
+#: whenever tools are offered. Whether every newer model accepts ``tools`` on Chat
+#: Completions was not checked, and KNOWN-BUGS lists it as unconfirmed.
+#:
+#: The reference says of the ``system`` role "With o1 models and newer, use
+#: `developer` messages for this purpose instead." Microsoft's Azure OpenAI
+#: reasoning guide (https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/reasoning,
+#: read 2026-09-30) says a system message sent to o4-mini, o3, o3-mini or o1 "will
+#: be treated as a developer message", and its table marks system messages as
+#: supported on gpt-5 and gpt-5-mini. This adapter therefore keeps sending
+#: ``system``.
+_OFFICIAL_TOKEN_LIMIT_FIELD = "max_completion_tokens"
+#: The field a custom OpenAI-compatible server gets. Ollama's list of supported
+#: request fields names ``max_tokens`` and does not name ``max_completion_tokens``
+#: (https://github.com/ollama/ollama/blob/main/docs/api/openai-compatibility.mdx,
+#: read 2026-09-30). A custom server therefore keeps ``max_tokens``.
+_COMPATIBLE_TOKEN_LIMIT_FIELD = "max_tokens"
 _TIMEOUT_SECONDS = 60.0
 # The validating GET's own budget + hop limits (list_models). Short: it runs on a
 # connect card the person is waiting on, so it gives up quickly.
@@ -126,6 +168,17 @@ class OpenAIProvider:
         # Names the service in plain-language network errors ("Couldn't reach OpenAI"
         # / "Couldn't reach the server").
         self._service_label = service_label
+        # This picks the field that carries the output cap. The choice depends on
+        # the endpoint this instance talks to, which the adapter already knows, so
+        # the orchestrator never has to ask what kind of provider it holds. The
+        # official address is a module constant, the same one ``list_models``
+        # compares against. A custom server configured with that address is the
+        # official API and gets the official field.
+        self._token_limit_field = (
+            _OFFICIAL_TOKEN_LIMIT_FIELD
+            if self._base_url == _DEFAULT_BASE_URL
+            else _COMPATIBLE_TOKEN_LIMIT_FIELD
+        )
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -136,7 +189,7 @@ class OpenAIProvider:
             supports_streaming=True,
             runs_off_device=False,
             vision=True,        # modern GPT-class models can analyze images
-            # chat.completions says "length" when the answer hit ``max_tokens``,
+            # chat.completions says "length" when the answer hit its output cap,
             # and both response paths below keep that word as it arrived. The same
             # adapter serves the custom OpenAI-compatible server (a different base
             # URL and label, one class), so a compatible server that reports the
@@ -152,15 +205,25 @@ class OpenAIProvider:
         timeout: float | None = None,
         on_delta=None,
     ) -> ModelResponse:
-        # ``effort`` is an Anthropic "answer style" (§4.1.1); OpenAI has no such
-        # per-message control here, so it is accepted and ignored for a uniform call.
+        # ``effort`` is Addison's per-message answer style (§4.1.1). This adapter
+        # accepts it and does not send it. Chat Completions does have a matching
+        # control. The reference describes ``reasoning_effort`` as "Constrains
+        # effort on reasoning for reasoning models", so it may only go to a
+        # reasoning model. The catalog gives OpenAI models no effort levels, so the
+        # picker never offers one for them. Whether to wire it up is an open
+        # question in docs/KNOWN-GAPS.md, beside the 4,096-token cap.
         api_key = self._resolve_key()
 
         body: dict = {
             "model": self._model,
-            "max_tokens": _MAX_TOKENS,
+            self._token_limit_field: _MAX_TOKENS,
             "messages": _translate_history(messages),
         }
+        # The table from wire name back to tool id, for mapping the reply. It is
+        # built before anything is sent, because it refuses two offered tools that
+        # would share a name. The replayed past calls are in it too, so a hidden
+        # tool the model names from history maps back to its real id.
+        names = wire_names((d.id for d in tools), replayed_tool_ids(messages))
         tool_blocks = _translate_tools(tools)
         if tool_blocks:
             body["tools"] = tool_blocks
@@ -170,7 +233,7 @@ class OpenAIProvider:
             headers["authorization"] = f"Bearer {api_key}"
 
         if on_delta is not None:
-            return self._send_streaming(headers, body, timeout, on_delta)
+            return self._send_streaming(headers, body, timeout, on_delta, names)
 
         response = self._post(headers, body, timeout)
         if response.status_code >= 400:
@@ -181,9 +244,11 @@ class OpenAIProvider:
                 response.status_code, self._http_error_message(response.status_code),
                 error_message_from_body(response),
             )
-        return _translate_response(response.json())
+        return _translate_response(response.json(), names)
 
-    def _send_streaming(self, headers: dict, body: dict, timeout, on_delta) -> ModelResponse:
+    def _send_streaming(
+        self, headers: dict, body: dict, timeout, on_delta, names: dict[str, str] | None = None
+    ) -> ModelResponse:
         """The same request with ``stream: true``, relaying text as it arrives.
 
         ``stream_options.include_usage`` is what keeps the ``usage_log`` row honest:
@@ -211,7 +276,7 @@ class OpenAIProvider:
                         response.status_code, self._http_error_message(response.status_code),
                         error_message_from_body(response),
                     )
-                return _translate_stream(iter_sse_json(response), on_delta)
+                return _translate_stream(iter_sse_json(response), on_delta, names)
         except httpx.HTTPError:
             raise ProviderUnavailable(
                 f"Couldn't reach {self._service_label}. "
@@ -278,7 +343,7 @@ def _translate_tools(tools: list) -> list[dict]:
         {
             "type": "function",
             "function": {
-                "name": d.id,
+                "name": wire_name(d.id),
                 "description": d.description,
                 "parameters": d.parameters_schema,
             },
@@ -303,7 +368,9 @@ def _translate_history(messages: list[Message]) -> list[dict]:
                 {
                     "id": c.id,
                     "type": "function",
-                    "function": {"name": c.tool_id, "arguments": json.dumps(c.args)},
+                    # The same name the tool list gave this tool. A tool message
+                    # carries only the tool_call_id.
+                    "function": {"name": wire_name(c.tool_id), "arguments": json.dumps(c.args)},
                 }
                 for c in m.tool_calls
             ]
@@ -318,7 +385,7 @@ def _translate_history(messages: list[Message]) -> list[dict]:
     return out
 
 
-def _translate_response(data: dict) -> ModelResponse:
+def _translate_response(data: dict, names: dict[str, str] | None = None) -> ModelResponse:
     choices = data.get("choices") or []
     choice = (choices[0] if choices else None) or {}
     message = choice.get("message") or {}
@@ -331,8 +398,9 @@ def _translate_response(data: dict) -> ModelResponse:
             continue
         tool_calls.append(
             ToolCallRequest(
+                # A call with no id takes the name as it arrived, as it always has.
                 id=raw.get("id") or name,
-                tool_id=name,
+                tool_id=tool_id_for(name, names),
                 args=_parse_arguments(fn.get("arguments")),
             )
         )
@@ -351,7 +419,7 @@ def _translate_response(data: dict) -> ModelResponse:
     return ModelResponse(text=text, tool_calls=[], finish_reason=reason, usage=usage)
 
 
-def _translate_stream(frames, on_delta) -> ModelResponse:
+def _translate_stream(frames, on_delta, names: dict[str, str] | None = None) -> ModelResponse:
     """Fold a chat.completions SSE stream into one ``ModelResponse``.
 
     Each frame carries ``choices[0].delta``. Text arrives as ``delta.content``;
@@ -402,7 +470,7 @@ def _translate_stream(frames, on_delta) -> ModelResponse:
     tool_calls = [
         ToolCallRequest(
             id=slot["id"] or slot["name"],
-            tool_id=slot["name"],
+            tool_id=tool_id_for(slot["name"], names),
             args=_parse_arguments(slot["arguments"]),
         )
         for _index, slot in sorted(pending.items(), key=lambda kv: kv[0])
