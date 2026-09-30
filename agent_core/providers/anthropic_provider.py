@@ -13,6 +13,11 @@ on the instance or anywhere longer-lived (§8.3).
 Note the module-boundary rule (CLAUDE.md §2): ``providers/`` must not import
 from ``tools/``. Tool definitions are therefore duck-typed here — send() only
 reads ``.id``, ``.description`` and ``.parameters_schema`` off each tool.
+
+A tool id goes out under ``tool_names.wire_name(id)``, in the tool list and in
+every replayed ``tool_use`` block, because the Messages API refuses a name with a
+colon or a space in it. A ``tool_use`` in the reply is mapped back to the id before
+it leaves this module (KNOWN-BUGS 18).
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from agent_core.providers.base import (
     open_stream,
     request_with_retry,
 )
+from agent_core.providers.tool_names import tool_id_for, wire_name, wire_names
 
 _API_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
@@ -118,6 +124,10 @@ class AnthropicProvider:
         system = _extract_system(messages)
         if system:
             body["system"] = system
+        # The table from wire name back to tool id, for mapping the reply. Built
+        # before anything is sent, because it refuses two tools that would share a
+        # name.
+        names = wire_names(d.id for d in tools)
         tool_blocks = _translate_tools(tools)
         if tool_blocks:  # omit the key entirely when there are no tools
             body["tools"] = tool_blocks
@@ -129,7 +139,7 @@ class AnthropicProvider:
         }
 
         if on_delta is not None:
-            return self._send_streaming(headers, body, timeout, on_delta)
+            return self._send_streaming(headers, body, timeout, on_delta, names)
 
         response = self._post(headers, body, timeout)
 
@@ -142,9 +152,11 @@ class AnthropicProvider:
                 error_message_from_body(response),
             )
 
-        return _translate_response(response.json())
+        return _translate_response(response.json(), names)
 
-    def _send_streaming(self, headers: dict, body: dict, timeout, on_delta) -> ModelResponse:
+    def _send_streaming(
+        self, headers: dict, body: dict, timeout, on_delta, names: dict[str, str] | None = None
+    ) -> ModelResponse:
         """The same request with ``stream: true``, relaying text as it arrives.
 
         Returns the SAME ``ModelResponse`` the non-streaming path would: the
@@ -171,7 +183,7 @@ class AnthropicProvider:
                         response.status_code, _http_error_message(response.status_code),
                         error_message_from_body(response),
                     )
-                return _translate_stream(iter_sse_json(response), on_delta)
+                return _translate_stream(iter_sse_json(response), on_delta, names)
         except httpx.HTTPError:
             # Identical wording to _post: a stream that drops mid-answer is the
             # same problem to the reader as one that never opened.
@@ -225,7 +237,7 @@ class AnthropicProvider:
 
 def _translate_tools(tools: list) -> list[dict]:
     return [
-        {"name": d.id, "description": d.description, "input_schema": d.parameters_schema}
+        {"name": wire_name(d.id), "description": d.description, "input_schema": d.parameters_schema}
         for d in tools
     ]
 
@@ -283,8 +295,11 @@ def _translate_history(messages: list[Message]) -> list[dict]:
                 if m.content:
                     content.append({"type": "text", "text": m.content})
                 for c in m.tool_calls:
+                    # The same name the tool list gave this tool, so the replayed
+                    # call matches it. A tool_result carries only the id.
                     content.append(
-                        {"type": "tool_use", "id": c.id, "name": c.tool_id, "input": c.args}
+                        {"type": "tool_use", "id": c.id, "name": wire_name(c.tool_id),
+                         "input": c.args}
                     )
                 api_messages.append({"role": "assistant", "content": content})
             else:
@@ -294,7 +309,7 @@ def _translate_history(messages: list[Message]) -> list[dict]:
     return api_messages
 
 
-def _translate_response(data: dict) -> ModelResponse:
+def _translate_response(data: dict, names: dict[str, str] | None = None) -> ModelResponse:
     text_parts: list[str] = []
     tool_calls: list[ToolCallRequest] = []
     for block in data.get("content", []):
@@ -305,7 +320,7 @@ def _translate_response(data: dict) -> ModelResponse:
             tool_calls.append(
                 ToolCallRequest(
                     id=block["id"],
-                    tool_id=block["name"],
+                    tool_id=tool_id_for(block["name"], names),
                     args=block.get("input", {}),
                 )
             )
@@ -318,7 +333,7 @@ def _translate_response(data: dict) -> ModelResponse:
     )
 
 
-def _translate_stream(frames, on_delta) -> ModelResponse:
+def _translate_stream(frames, on_delta, names: dict[str, str] | None = None) -> ModelResponse:
     """Fold the Messages API event stream into one ``ModelResponse``.
 
     The events that matter, and nothing else (an unknown event type is skipped,
@@ -388,7 +403,7 @@ def _translate_stream(frames, on_delta) -> ModelResponse:
     tool_calls = [
         ToolCallRequest(
             id=block["id"],
-            tool_id=block["name"],
+            tool_id=tool_id_for(block["name"], names),
             args=_parse_tool_input(block["json"]),
         )
         for _index, block in sorted(tool_blocks.items(), key=lambda kv: kv[0])

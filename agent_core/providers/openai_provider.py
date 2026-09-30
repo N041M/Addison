@@ -17,6 +17,12 @@ provider, is never proxied through the webview.
 Note the module-boundary rule (CLAUDE.md §2): ``providers/`` must not import from
 ``tools/``. Tool definitions are duck-typed — send() only reads ``.id``,
 ``.description`` and ``.parameters_schema`` off each tool.
+
+A tool id goes out under ``tool_names.wire_name(id)``, in the tool list and in
+every replayed ``tool_calls`` entry, because Chat Completions refuses a function
+name with a colon or a space in it. A tool call in the reply is mapped back to the
+id before it leaves this module (KNOWN-BUGS 18). A custom server gets the same
+names. They follow OpenAI's rule, so a server that copies OpenAI's API accepts them.
 """
 
 from __future__ import annotations
@@ -42,6 +48,7 @@ from agent_core.providers.base import (
     open_stream,
     request_with_retry,
 )
+from agent_core.providers.tool_names import tool_id_for, wire_name, wire_names
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 _MAX_TOKENS = 4096
@@ -161,6 +168,10 @@ class OpenAIProvider:
             "max_tokens": _MAX_TOKENS,
             "messages": _translate_history(messages),
         }
+        # The table from wire name back to tool id, for mapping the reply. Built
+        # before anything is sent, because it refuses two tools that would share a
+        # name.
+        names = wire_names(d.id for d in tools)
         tool_blocks = _translate_tools(tools)
         if tool_blocks:
             body["tools"] = tool_blocks
@@ -170,7 +181,7 @@ class OpenAIProvider:
             headers["authorization"] = f"Bearer {api_key}"
 
         if on_delta is not None:
-            return self._send_streaming(headers, body, timeout, on_delta)
+            return self._send_streaming(headers, body, timeout, on_delta, names)
 
         response = self._post(headers, body, timeout)
         if response.status_code >= 400:
@@ -181,9 +192,11 @@ class OpenAIProvider:
                 response.status_code, self._http_error_message(response.status_code),
                 error_message_from_body(response),
             )
-        return _translate_response(response.json())
+        return _translate_response(response.json(), names)
 
-    def _send_streaming(self, headers: dict, body: dict, timeout, on_delta) -> ModelResponse:
+    def _send_streaming(
+        self, headers: dict, body: dict, timeout, on_delta, names: dict[str, str] | None = None
+    ) -> ModelResponse:
         """The same request with ``stream: true``, relaying text as it arrives.
 
         ``stream_options.include_usage`` is what keeps the ``usage_log`` row honest:
@@ -211,7 +224,7 @@ class OpenAIProvider:
                         response.status_code, self._http_error_message(response.status_code),
                         error_message_from_body(response),
                     )
-                return _translate_stream(iter_sse_json(response), on_delta)
+                return _translate_stream(iter_sse_json(response), on_delta, names)
         except httpx.HTTPError:
             raise ProviderUnavailable(
                 f"Couldn't reach {self._service_label}. "
@@ -278,7 +291,7 @@ def _translate_tools(tools: list) -> list[dict]:
         {
             "type": "function",
             "function": {
-                "name": d.id,
+                "name": wire_name(d.id),
                 "description": d.description,
                 "parameters": d.parameters_schema,
             },
@@ -303,7 +316,9 @@ def _translate_history(messages: list[Message]) -> list[dict]:
                 {
                     "id": c.id,
                     "type": "function",
-                    "function": {"name": c.tool_id, "arguments": json.dumps(c.args)},
+                    # The same name the tool list gave this tool. A tool message
+                    # carries only the tool_call_id.
+                    "function": {"name": wire_name(c.tool_id), "arguments": json.dumps(c.args)},
                 }
                 for c in m.tool_calls
             ]
@@ -318,7 +333,7 @@ def _translate_history(messages: list[Message]) -> list[dict]:
     return out
 
 
-def _translate_response(data: dict) -> ModelResponse:
+def _translate_response(data: dict, names: dict[str, str] | None = None) -> ModelResponse:
     choices = data.get("choices") or []
     choice = (choices[0] if choices else None) or {}
     message = choice.get("message") or {}
@@ -331,8 +346,9 @@ def _translate_response(data: dict) -> ModelResponse:
             continue
         tool_calls.append(
             ToolCallRequest(
+                # A call with no id takes the name as it arrived, as it always has.
                 id=raw.get("id") or name,
-                tool_id=name,
+                tool_id=tool_id_for(name, names),
                 args=_parse_arguments(fn.get("arguments")),
             )
         )
@@ -351,7 +367,7 @@ def _translate_response(data: dict) -> ModelResponse:
     return ModelResponse(text=text, tool_calls=[], finish_reason=reason, usage=usage)
 
 
-def _translate_stream(frames, on_delta) -> ModelResponse:
+def _translate_stream(frames, on_delta, names: dict[str, str] | None = None) -> ModelResponse:
     """Fold a chat.completions SSE stream into one ``ModelResponse``.
 
     Each frame carries ``choices[0].delta``. Text arrives as ``delta.content``;
@@ -402,7 +418,7 @@ def _translate_stream(frames, on_delta) -> ModelResponse:
     tool_calls = [
         ToolCallRequest(
             id=slot["id"] or slot["name"],
-            tool_id=slot["name"],
+            tool_id=tool_id_for(slot["name"], names),
             args=_parse_arguments(slot["arguments"]),
         )
         for _index, slot in sorted(pending.items(), key=lambda kv: kv[0])

@@ -487,7 +487,9 @@ Component by component:
   hold the IPC pump) and bounds the whole handshake-plus-pagination walk to one
   budget. A discovered tool registers namespaced `mcp:<server>:<tool>`, `dev_only`,
   HIGH and destructive unconditionally; an id collision REFUSES that tool rather than
-  replacing anything. Everything a server sends is untrusted text, so names,
+  replacing anything. The cloud adapters send that id to a model under a name from
+  `providers/tool_names.py`, because the vendors refuse a colon or a space in a tool
+  name. Everything a server sends is untrusted text, so names,
   descriptions, schemas, counts and response bodies are capped and cleaned at the
   `mcp_client` boundary. Two registry dimensions arrived with it: `removable` (only
   a discovered tool may ever be unregistered) and `not_callable` (absent from

@@ -11,6 +11,12 @@ only — never stored on the instance or anywhere longer-lived (§8.3).
 Note the module-boundary rule (CLAUDE.md §2): ``providers/`` must not import from
 ``tools/``. Tool definitions are duck-typed — send() only reads ``.id``,
 ``.description`` and ``.parameters_schema`` off each tool.
+
+A tool id goes out under ``tool_names.wire_name(id)``, in the function
+declarations and in every replayed ``functionCall`` and ``functionResponse`` part.
+Gemini accepts a colon in a declared name and refuses a space, and it allows
+neither in a ``functionCall`` or ``functionResponse`` name. A ``functionCall`` in
+the reply is mapped back to the id before it leaves this module (KNOWN-BUGS 18).
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from agent_core.providers.base import (
     open_stream,
     request_with_retry,
 )
+from agent_core.providers.tool_names import tool_id_for, wire_name, wire_names
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _TIMEOUT_SECONDS = 60.0
@@ -98,13 +105,17 @@ class GoogleProvider:
         system = _extract_system(messages)
         if system:
             body["systemInstruction"] = {"parts": [{"text": system}]}
+        # The table from wire name back to tool id, for mapping the reply. Built
+        # before anything is sent, because it refuses two tools that would share a
+        # name.
+        names = wire_names(d.id for d in tools)
         tool_blocks = _translate_tools(tools)
         if tool_blocks:
             body["tools"] = tool_blocks
 
         headers = {"x-goog-api-key": api_key, "content-type": "application/json"}
         if on_delta is not None:
-            return self._send_streaming(headers, body, timeout, on_delta)
+            return self._send_streaming(headers, body, timeout, on_delta, names)
 
         response = self._post(headers, body, timeout)
         if response.status_code >= 400:
@@ -112,9 +123,11 @@ class GoogleProvider:
                 response.status_code, _http_error_message(response.status_code),
                 error_message_from_body(response),
             )
-        return _translate_response(response.json())
+        return _translate_response(response.json(), names)
 
-    def _send_streaming(self, headers: dict, body: dict, timeout, on_delta) -> ModelResponse:
+    def _send_streaming(
+        self, headers: dict, body: dict, timeout, on_delta, names: dict[str, str] | None = None
+    ) -> ModelResponse:
         """``:streamGenerateContent?alt=sse``, relaying text as it arrives.
 
         Gemini's streaming method takes the SAME request body and emits frames of
@@ -141,7 +154,7 @@ class GoogleProvider:
                         response.status_code, _http_error_message(response.status_code),
                         error_message_from_body(response),
                     )
-                return _translate_stream(iter_sse_json(response), on_delta)
+                return _translate_stream(iter_sse_json(response), on_delta, names)
         except httpx.HTTPError:
             raise ProviderUnavailable(
                 "Couldn't reach Google. Check your internet connection and try again."
@@ -192,7 +205,7 @@ class GoogleProvider:
 def _translate_tools(tools: list) -> list[dict]:
     # Duck-typed — providers/ must not import tools/ (module-boundary rule).
     declarations = [
-        {"name": d.id, "description": d.description, "parameters": d.parameters_schema}
+        {"name": wire_name(d.id), "description": d.description, "parameters": d.parameters_schema}
         for d in tools
     ]
     return [{"functionDeclarations": declarations}] if declarations else []
@@ -232,7 +245,10 @@ def _translate_history(messages: list[Message]) -> list[dict]:
         if m.role == "system":
             continue  # carried by systemInstruction
         if m.role == "tool":
-            name = call_names.get(m.tool_call_id or "", m.tool_call_id or "tool")
+            # ``call_names`` already holds wire names. The fallback, for a result
+            # whose call is not in this history, goes through ``wire_name`` as well
+            # so that the name position never carries a character Gemini refuses.
+            name = call_names.get(m.tool_call_id or "") or wire_name(m.tool_call_id or "tool")
             pending_results.append(
                 {
                     "functionResponse": {
@@ -252,7 +268,7 @@ def _translate_history(messages: list[Message]) -> list[dict]:
             if m.content:
                 parts.append({"text": m.content})
             for c in m.tool_calls:
-                call_names[c.id] = c.tool_id
+                call_names[c.id] = wire_name(c.tool_id)
                 parts.append(_function_call_part(c))
             contents.append({"role": "model", "parts": parts})
 
@@ -271,17 +287,18 @@ def _function_call_part(call: ToolCallRequest) -> dict:
     none. Parallel calls each keep their own, because the signature is stored on
     the ToolCallRequest and never on the turn.
     """
-    part: dict = {"functionCall": {"name": call.tool_id, "args": call.args}}
+    part: dict = {"functionCall": {"name": wire_name(call.tool_id), "args": call.args}}
     signature = (call.provider_meta or {}).get(_SIGNATURE_FIELD)
     if isinstance(signature, str) and signature:
         part[_SIGNATURE_FIELD] = signature
     return part
 
 
-def _tool_call_from_part(part: dict) -> ToolCallRequest | None:
+def _tool_call_from_part(part: dict, names: dict[str, str] | None = None) -> ToolCallRequest | None:
     """A ``functionCall`` response part as a ``ToolCallRequest``, or None if the
     part names no function. Shared by the plain and streaming translations so a
-    signature can never be captured by one path and dropped by the other."""
+    signature can never be captured by one path and dropped by the other, and so
+    the name is mapped back to the tool id on both."""
     fn = part.get("functionCall") or {}
     name = fn.get("name")
     if not name:
@@ -294,7 +311,10 @@ def _tool_call_from_part(part: dict) -> ToolCallRequest | None:
     if isinstance(signature, str) and signature:
         meta[_SIGNATURE_FIELD] = signature
     return ToolCallRequest(
-        id=f"google-{uuid.uuid4().hex[:8]}", tool_id=name, args=args, provider_meta=meta
+        id=f"google-{uuid.uuid4().hex[:8]}",
+        tool_id=tool_id_for(name, names),
+        args=args,
+        provider_meta=meta,
     )
 
 
@@ -317,7 +337,7 @@ def _finish_reason(candidate: dict) -> str | None:
     return "stop" if reason == "STOP" else reason
 
 
-def _translate_response(data: dict) -> ModelResponse:
+def _translate_response(data: dict, names: dict[str, str] | None = None) -> ModelResponse:
     candidates = data.get("candidates") or []
     candidate = (candidates[0] if candidates else None) or {}
     content = candidate.get("content") or {}
@@ -327,7 +347,7 @@ def _translate_response(data: dict) -> ModelResponse:
         if not isinstance(part, dict):
             continue
         if "functionCall" in part:
-            call = _tool_call_from_part(part)
+            call = _tool_call_from_part(part, names)
             if call is None:
                 continue
             tool_calls.append(call)
@@ -347,7 +367,7 @@ def _translate_response(data: dict) -> ModelResponse:
     )
 
 
-def _translate_stream(frames, on_delta) -> ModelResponse:
+def _translate_stream(frames, on_delta, names: dict[str, str] | None = None) -> ModelResponse:
     """Fold a ``streamGenerateContent`` SSE stream into one ``ModelResponse``.
 
     Every frame is a partial ``generateContent`` payload, so this is
@@ -379,7 +399,7 @@ def _translate_stream(frames, on_delta) -> ModelResponse:
             if not isinstance(part, dict):
                 continue
             if "functionCall" in part:
-                call = _tool_call_from_part(part)
+                call = _tool_call_from_part(part, names)
                 if call is None:
                     continue
                 tool_calls.append(call)
