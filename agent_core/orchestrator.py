@@ -107,7 +107,13 @@ _SEGMENT_BREAK = "\n\n"
 # rollback/fallback safety window. Read through the module namespace inside
 # run_turn so tests can monkeypatch them (small values keep the budget test fast).
 _COOLDOWN_SECONDS = 60.0          # per provider id, in-memory; set on ProviderUnavailable
-_FALLBACK_BUDGET_SECONDS = 120.0  # a real per-attempt deadline ([MF-A]), not a between gate
+# How long one send may spend walking the chain, summed over every candidate it
+# tries. Each attempt is handed what is left as its deadline ([MF-A]), so one hanging
+# candidate cannot outlast it. The clock restarts for each send in the turn. It used
+# to start once per turn, which charged every permission card, arming code and tool
+# run to the send after it. A card answered after two minutes then failed the turn
+# after the tool had run, and the model was never asked again (KNOWN-BUGS 17).
+_FALLBACK_BUDGET_SECONDS = 120.0
 # The fallback note surfaces on the SAME Activity Panel channel as tool activity
 # (D4); a synthetic id keeps _emit_activity's tool-agnostic contract intact.
 _ROUTING_ACTIVITY_ID = "routing"
@@ -469,7 +475,7 @@ class Orchestrator:
             )
         else:
             # The routed path (D4): walk the ordered chain, falling forward on
-            # ProviderUnavailable within the per-turn budget, and report the
+            # ProviderUnavailable within each send's budget, and report the
             # answering candidate (answeredWith, D5).
             self._run_with_fallback(
                 conversation, context, guards, mode, chain, requested_role, model_name, effort,
@@ -571,7 +577,6 @@ class Orchestrator:
         self, conversation, context, guards, mode, chain, requested_role, model_name, effort,
         surface, sink,
     ) -> None:
-        turn_started = time.monotonic()
         # Cooldown-filter the chain, but never lock: if EVERYTHING is cooled, try the
         # whole chain anyway, in normal (preferred-first) order ([S-a]).
         active = [
@@ -612,8 +617,16 @@ class Orchestrator:
             # Rejected/AuthFailed propagate immediately (the next provider gets the
             # same bad request / bad key — no walk). Continuation, never restart:
             # conversation state is intact and only the provider changes.
+            #
+            # The budget clock starts here, once per send (_FALLBACK_BUDGET_SECONDS).
+            # Cards, arming codes and tool runs all happen in _run_tool_calls, outside
+            # this loop, so the time it measures is time spent trying models. The one
+            # wait on the person that can still fall inside it is a keychain prompt
+            # during a send, which the shell raises at most once per provider per
+            # launch.
+            walk_started = time.monotonic()
             while True:
-                remaining = _FALLBACK_BUDGET_SECONDS - (time.monotonic() - turn_started)
+                remaining = _FALLBACK_BUDGET_SECONDS - (time.monotonic() - walk_started)
                 if remaining <= 0 or idx >= len(active):
                     # Budget spent, or the chain is exhausted -> fail plainly with the
                     # last provider's own sentence (more specific than the generic).
@@ -635,9 +648,10 @@ class Orchestrator:
                         messages=outbound,
                         tools=self._tools_for(mode, surface),
                         effort=effort,
-                        # [MF-A] a real per-attempt deadline: the provider clamps this
-                        # to its own default, so a healthy first send is byte-identical
-                        # to today, and no single hanging candidate can blow the budget.
+                        # [MF-A] a real per-attempt deadline. The provider clamps this
+                        # to its own default, so a healthy send gets exactly that
+                        # default, and no single hanging candidate can outlast the
+                        # send's budget.
                         timeout=remaining,
                         on_delta=relay,
                     )

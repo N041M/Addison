@@ -67,7 +67,7 @@ def request_with_retry(
     ``allow_retry=False`` disables the internal retry entirely. Providers pass
     it when the caller supplied a per-call deadline ([MF-A]): a deadline means
     the routing attempt loop is driving, and THAT loop is the retry mechanism —
-    a hidden second attempt here would double the per-turn budget on a
+    a hidden second attempt here would double the send's fallback budget on a
     ConnectTimeout (up to 2× deadline + the sleep), which is exactly the hole
     the budget exists to close (post-build adversarial pass, 2026-07-24).
     Standalone calls (no deadline) keep today's one-retry robustness unchanged.
@@ -451,9 +451,9 @@ def iter_sse_json(response: httpx.Response) -> Iterator[dict]:
 
 def effective_timeout(override: float | None, default: float) -> float:
     """The per-call timeout a provider actually uses ([MF-A]). ``None`` -> the
-    provider's own default (freeze). A value only ever TIGHTENS the default, never
-    extends it, so handing a provider the full remaining per-turn budget on a
-    healthy first send resolves to exactly today's constant."""
+    provider's own default (freeze). A value only ever TIGHTENS the default and
+    never extends it. Handing a provider the whole remaining budget for a send
+    therefore resolves to exactly the provider's own constant on a healthy send."""
     if override is None:
         return default
     return min(override, default)
@@ -570,12 +570,12 @@ class ModelProvider(Protocol):
     # AnthropicProvider acts on it (and only for models that support it); every other
     # provider ACCEPTS and IGNORES it, so the orchestrator can pass it uniformly.
     #
-    # ``timeout`` ([MF-A]) is an optional per-call deadline in seconds the attempt
-    # loop threads down so a single hanging candidate can never blow the per-turn
-    # budget. None means "use my own default" — byte-identical to today. A provider
-    # never EXTENDS past its own default; the override only ever tightens it
-    # (``effective_timeout``), so passing the whole remaining budget on the first,
-    # healthy send resolves to today's constant exactly.
+    # ``timeout`` ([MF-A]) is an optional per-call deadline in seconds. The attempt
+    # loop threads it down so a single hanging candidate can never outlast the
+    # fallback budget for the send it is part of. None means "use my own default".
+    # A provider never extends past its own default, because the override only ever
+    # tightens it (``effective_timeout``). Passing the whole remaining budget on a
+    # healthy send therefore resolves to the provider's own constant exactly.
     #
     # ``on_delta`` is how an answer reaches the reader AS IT ARRIVES. A provider
     # that streams calls it with each piece of assistant prose and STILL returns

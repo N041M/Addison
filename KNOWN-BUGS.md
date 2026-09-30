@@ -59,18 +59,20 @@ others are struck.
     `agent_core/snapshots/snapshot_manager.py` (`_decode_payload`) ·
     `agent_core/snapshots/scope.py`
 
-17. **A turn fails if the person takes more than two minutes to answer a
-    permission card.** The tool still runs. The chat then shows "Addison couldn't
-    reach a model to answer just now" and the model is never asked again.
-    Live repro: the fake model asks for `save_file` and the card is answered Allow
-    after 125 s. The file is on disk, the model received one request, and
-    `sendMessage` returned that error. The routed path starts its 120-second
-    fallback budget once per turn (`turn_started`), so card waits, tool run time
-    and typing an arming code are all charged to it. Production always takes the
-    routed path. `rpc/conversation.py` then removes the partial exchange, so the
-    action happened and the transcript does not show it. The arming card is the
-    worst case, because a job can be armed behind an error message.
-    **Reproduced by the coordinator.**
+17. ~~**A turn fails if the person takes more than two minutes to answer a
+    permission card.**~~ **RE-RUN GREEN 2026-09-30.** The live repro was run again
+    on branch `claude/fix-card-wait-budget`. The fake model asked for `save_file`
+    and the card was answered Allow after 125 s. The file was on disk, the model
+    received a second request carrying the tool result, and `sendMessage` returned
+    `ok` with the model's answer, which the stored transcript shows. The same run
+    against the unfixed tree still failed as first reported. A second run, in which
+    the model stops answering after the card, ended the turn 62 s after the card
+    with the provider's own sentence. The routed path used to start its 120-second
+    fallback budget once per turn, so card waits, arming codes and tool runs were
+    charged to the send after them. The budget now restarts for each send and is
+    still shared by every candidate that send tries. `rpc/conversation.py` still
+    removes a failed turn's partial exchange, and this entry's path no longer
+    reaches it.
     `agent_core/orchestrator.py` (`_run_with_fallback`, `_FALLBACK_BUDGET_SECONDS`)
 
 18. **Once a tool server is checked, every Developer message fails on Anthropic and

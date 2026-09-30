@@ -1,8 +1,8 @@
 """Step-3 stage 2 — the orchestrator attempt loop (contract D4/D5, [MF-A]/[S-a]/[S-b]).
 
-Graceful fallback, cooldown, the per-turn budget deadline, cross-provider forbid,
-resolved-identity usage, and answeredWith. Each test pins one behaviour and is
-built to go red if its rule is reverted.
+Graceful fallback, cooldown, the budget deadline for each send's walk down the
+chain, cross-provider forbid, resolved-identity usage, and answeredWith. Each test
+pins one behaviour and is built to go red if its rule is reverted.
 
 Fakes here accept the ``timeout`` kwarg the routed path threads down ([MF-A]) and
 can be scripted to answer, request a tool, or raise a provider exception.
@@ -16,7 +16,7 @@ import pytest
 
 import agent_core.orchestrator as orch_mod
 from agent_core.orchestrator import Conversation, Orchestrator
-from agent_core.permissions.gate import PermissionGate
+from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.providers.base import (
     Message,
     ModelResponse,
@@ -70,11 +70,15 @@ class _Provider:
 class _BlockingProvider:
     """Sleeps for the deadline it is given, then raises ProviderUnavailable —
     stands in for a candidate that hangs until its timeout. A missing deadline
-    falls back to a long sleep, so a reverted ``timeout=`` shows up as an overrun."""
+    falls back to a long sleep, so a reverted ``timeout=`` shows up as an overrun.
 
-    def __init__(self):
+    ``before`` is a list of responses returned, in order, by the first sends. It
+    stands in for a model that answers a round and then stops answering."""
+
+    def __init__(self, before=()):
         self.sends = 0
         self.timeouts: list[float | None] = []
+        self._before = list(before)
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -85,6 +89,8 @@ class _BlockingProvider:
     def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
         self.sends += 1
         self.timeouts.append(timeout)
+        if self._before:
+            return self._before.pop(0)
         time.sleep(timeout if timeout is not None else 5.0)
         raise ProviderUnavailable("busy")
 
@@ -121,12 +127,17 @@ def _cand(model_id, provider_id, *, role=ModelRole.PRIMARY, free=False, local=Fa
 
 
 def _build(providers: dict, chain, *, on_usage=None, on_answered=None, on_activity=None,
-           model_name=None, on_provider_attempt=None):
+           model_name=None, on_provider_attempt=None, on_request=None, tools=()):
     """Orchestrator whose router resolves each candidate to its fake provider, with a
-    fixed chain and spy callbacks. Returns (orchestrator, conversation)."""
+    fixed chain and spy callbacks. Returns (orchestrator, conversation).
+
+    ``on_request`` is the card handler, for a test that needs a card answered.
+    ``tools`` are registered beside the granted spy and are not granted."""
     registry = ToolRegistry()
     registry.register(_SpyTool())
-    gate = PermissionGate()
+    for tool in tools:
+        registry.register(tool)
+    gate = PermissionGate(on_request=on_request)
     gate.grant("spy")
     primary, local = {}, {}
     for c in chain:
@@ -337,6 +348,145 @@ def test_no_send_once_the_budget_is_spent(monkeypatch):
     with pytest.raises(ProviderUnavailable):
         orch.run_turn(conv)
     assert a.sends == 0                             # the pre-send budget check held
+
+
+# --- KNOWN-BUGS 17: the budget covers one send's walk and nothing else -------
+# The budget used to start once per turn, so a card answered after two minutes left
+# nothing for the send that follows it. The tool had run, the model was never asked
+# again, and the turn failed with "Addison couldn't reach a model". A card, an arming
+# code and a running tool all happen between two sends, and none of that time is
+# spent trying a model. These tests shrink the budget and make each wait longer than
+# it, which is the 125-second card from the live repro at a size a test can afford.
+_SHORT_BUDGET = 0.2
+_LONGER_THAN_THE_BUDGET = 0.35
+
+
+def _schema():
+    return {"type": "object", "properties": {}}
+
+
+class _CardTool:
+    """A tool the gate has not granted, so the SAFE gate raises a card for it."""
+
+    definition = ToolDefinition(
+        id="card", label="Card", description="t", risk_tier=RiskTier.LOW,
+        parameters_schema=_schema(),
+    )
+
+    def __init__(self):
+        self.runs = 0
+
+    def execute(self, args, context) -> ToolResult:
+        self.runs += 1
+        return ToolResult(success=True, content="ok")
+
+
+class _ArmingTool(_CardTool):
+    """A tool that declares an arming preview, so the gate asks for the typed code
+    (``permissions.gate.call_arming_card``) instead of raising an ordinary card."""
+
+    definition = ToolDefinition(
+        id="arm", label="Arm", description="t", risk_tier=RiskTier.LOW,
+        parameters_schema=_schema(),
+    )
+
+    def arming_card(self, args) -> dict:
+        return {"name": "Nightly backup"}
+
+
+class _SlowTool(_CardTool):
+    """A tool that runs for longer than the budget."""
+
+    definition = ToolDefinition(
+        id="slow", label="Slow", description="t", risk_tier=RiskTier.LOW,
+        parameters_schema=_schema(),
+    )
+
+    def execute(self, args, context) -> ToolResult:
+        time.sleep(_LONGER_THAN_THE_BUDGET)
+        return super().execute(args, context)
+
+
+def _person_answers_allow(after: float, seen: list):
+    """A card handler that records what it was shown, waits ``after`` seconds and
+    answers Allow. The arming path passes the preview as the third argument."""
+
+    def on_request(tool_id, detail=None, arming=None):
+        seen.append((tool_id, arming))
+        time.sleep(after)
+        return PermissionStatus.GRANTED
+
+    return on_request
+
+
+def _assistant_texts(conv):
+    return [m.content for m in conv.messages if m.role == "assistant"]
+
+
+@pytest.mark.parametrize(
+    ("tool_class", "card_wait", "expected_card"),
+    [
+        (_CardTool, _LONGER_THAN_THE_BUDGET, ("card", None)),
+        (_ArmingTool, _LONGER_THAN_THE_BUDGET, ("arm", {"name": "Nightly backup"})),
+        (_SlowTool, 0.0, ("slow", None)),
+    ],
+    ids=["permission card", "arming code", "tool run"],
+)
+def test_time_between_two_sends_is_not_charged_to_the_next_send(
+    monkeypatch, tool_class, card_wait, expected_card
+):
+    monkeypatch.setattr(orch_mod, "_FALLBACK_BUDGET_SECONDS", _SHORT_BUDGET)
+    tool = tool_class()
+    a = _Provider([_tool_then(tool.definition.id), _answer("done")])
+    seen: list = []
+    orch, conv = _build(
+        {"a": a}, [_cand("a", "pa")],
+        on_request=_person_answers_allow(card_wait, seen), tools=[tool],
+    )
+    orch.run_turn(conv)
+    assert seen == [expected_card]          # the person was asked, and said Allow
+    assert tool.runs == 1                   # the tool ran once
+    assert a.sends == 2                     # and the model was asked again after it
+    assert _assistant_texts(conv)[-1] == "done"
+    # The send after the wait was handed the whole budget as its deadline.
+    assert a.timeouts[1] == pytest.approx(_SHORT_BUDGET, abs=0.05)
+
+
+def test_a_model_that_hangs_after_a_late_card_still_ends_the_turn(monkeypatch):
+    # The other half of the requirement. The second send gets a fresh budget, and
+    # that budget is still a deadline: a model that stops answering after the card
+    # ends the turn one budget later instead of hanging it.
+    monkeypatch.setattr(orch_mod, "_FALLBACK_BUDGET_SECONDS", _SHORT_BUDGET)
+    blocker = _BlockingProvider(before=[_tool_then("card")])
+    orch, conv = _build(
+        {"a": blocker}, [_cand("a", "pa")],
+        on_request=_person_answers_allow(_LONGER_THAN_THE_BUDGET, []), tools=[_CardTool()],
+    )
+    start = time.monotonic()
+    with pytest.raises(ProviderUnavailable):
+        orch.run_turn(conv)
+    elapsed = time.monotonic() - start
+    assert blocker.sends == 2
+    assert blocker.timeouts[1] is not None and blocker.timeouts[1] <= _SHORT_BUDGET
+    # The card's wait plus one budget, with room for a slow machine. A deadline
+    # that was not threaded into the second send would sleep 5 s here.
+    assert elapsed < _LONGER_THAN_THE_BUDGET + _SHORT_BUDGET + 1.0
+
+
+def test_one_sends_walk_shares_one_budget_across_every_candidate(monkeypatch):
+    # The budget restarts for each send and never for each candidate. Three hanging
+    # candidates must not get a budget each: the first one uses it all, so the walk
+    # ends there and the turn fails after one budget instead of three.
+    monkeypatch.setattr(orch_mod, "_FALLBACK_BUDGET_SECONDS", _SHORT_BUDGET)
+    blockers = {m: _BlockingProvider() for m in ("a", "b", "c")}
+    orch, conv = _build(blockers, [_cand("a", "pa"), _cand("b", "pb"), _cand("c", "pc")])
+    start = time.monotonic()
+    with pytest.raises(ProviderUnavailable):
+        orch.run_turn(conv)
+    elapsed = time.monotonic() - start
+    assert blockers["a"].sends == 1
+    assert blockers["c"].sends == 0
+    assert elapsed < _SHORT_BUDGET + 0.5
 
 
 # --- cooldown behaviour (D4 / [S-a]) ----------------------------------------
