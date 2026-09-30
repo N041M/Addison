@@ -70,9 +70,9 @@ others are struck.
     with the provider's own sentence. The routed path used to start its 120-second
     fallback budget once per turn, so card waits, arming codes and tool runs were
     charged to the send after them. The budget now restarts for each send and is
-    still shared by every candidate that send tries. `rpc/conversation.py` still
-    removes a failed turn's partial exchange, and this entry's path no longer
-    reaches it.
+    still shared by every candidate that send tries. Entry 91 records that
+    `rpc/conversation.py` still removes a failed turn's partial exchange. This
+    entry's path no longer reaches it.
     `agent_core/orchestrator.py` (`_run_with_fallback`, `_FALLBACK_BUDGET_SECONDS`)
 
 18. **Once a tool server is checked, every Developer message fails on Anthropic and

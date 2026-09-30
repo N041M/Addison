@@ -1318,7 +1318,9 @@ need a decision rather than a fix.
   end the running job. After Stop the core still makes model requests and streams
   their text, and a tool that needs no card still runs (KNOWN-BUGS 22 and 23). The
   decision is whether Stop ends the job at the next step boundary, and if it does,
-  whether the stopped text is kept or dropped.
+  whether the stopped text is kept or dropped. Since 2026-09-30 the fallback budget
+  restarts for each send (KNOWN-BUGS 17), so a stopped turn can keep asking a slow
+  model for up to 25 sends, where it used to stop about 120 s after it began.
 - **An unanswered message after a crash.** When the engine dies mid-turn, the
   person's message is stored with no answer. The next turn sends it next to the new
   message as two user messages in a row, and the model may act on the old request.

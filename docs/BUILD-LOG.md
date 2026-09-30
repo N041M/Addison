@@ -41,16 +41,35 @@ mutation in a scratch copy of the tree.
   candidates would otherwise get a budget each.
 - Passing no deadline to the send turns the hang test red, beside the older
   `test_budget_deadline_bounds_a_blocking_candidate`.
+- Handing every attempt a whole budget as its deadline turns
+  `test_each_attempt_is_handed_what_is_left_of_the_budget` red. The review of this
+  change found that no test caught that mutation, because in every other walk test
+  the first candidate uses the whole budget.
 
 The live repro was run again over stdio against a fake OpenAI-compatible server. With
 the card answered after 125 s, the turn finished with the model's answer and two model
 requests. With a model that stops answering after the card, the turn ended 62 s later
 with the provider's own sentence.
 
+This change raises the longest time a turn can spend on models. Before it, the clock
+ran for the whole turn, so a turn stopped starting model requests about 120 s after it
+began. Now each send has its own 120 s for its walk down the chain. Each attempt's
+timeout is the smaller of what is left and the provider's default, which is 60 s for
+the cloud adapters and 120 s for Ollama. That timeout applies to each wait for data,
+so a model that keeps streaming text can run past it. A turn makes at most 25 sends
+(`_MAX_TOOL_ROUNDS`), and a send that keeps failing stops when its budget is spent or
+its chain runs out of candidates. Two consequences follow from the new bound. Stop
+does not end the job (KNOWN-BUGS 22 and 23), so after Stop a slow model can keep being
+asked for up to 25 sends. Model time alone can also pass the webview's
+`TURN_TIMEOUT_MS` of 900 s (`shell/src/ipc/client.ts`), for example with eight rounds
+of 120 s on a slow Ollama model. The webview then drops the reply when it arrives and
+lets the person send again while the core is still working.
+
 Two things are left as they were. A keychain prompt raised during a send still falls
 inside that send's budget, and the shell raises it at most once per provider per
 launch. A turn that fails after a tool has run still has its partial exchange removed
-by `rpc/conversation.py`, so the transcript does not show the action.
+by `rpc/conversation.py`, so the transcript does not show the action. KNOWN-BUGS 91
+records that.
 
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 

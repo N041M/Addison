@@ -350,13 +350,13 @@ def test_no_send_once_the_budget_is_spent(monkeypatch):
     assert a.sends == 0                             # the pre-send budget check held
 
 
-# --- KNOWN-BUGS 17: the budget covers one send's walk and nothing else -------
-# The budget used to start once per turn, so a card answered after two minutes left
-# nothing for the send that follows it. The tool had run, the model was never asked
-# again, and the turn failed with "Addison couldn't reach a model". A card, an arming
-# code and a running tool all happen between two sends, and none of that time is
-# spent trying a model. These tests shrink the budget and make each wait longer than
-# it, which is the 125-second card from the live repro at a size a test can afford.
+# --- KNOWN-BUGS 17: the budget clock restarts for each send ------------------
+# The budget used to start once per turn. A card answered after two minutes left no
+# budget for the send after it, so the tool ran, the model was not asked again, and
+# the turn failed with "Addison couldn't reach a model". A card, an arming code and a
+# tool run all happen between two sends. The budget now covers only the time a send
+# spends trying models. These tests use a short budget and make each wait longer than
+# it, which scales the 125-second card from the live repro down to test size.
 _SHORT_BUDGET = 0.2
 _LONGER_THAN_THE_BUDGET = 0.35
 
@@ -453,9 +453,8 @@ def test_time_between_two_sends_is_not_charged_to_the_next_send(
 
 
 def test_a_model_that_hangs_after_a_late_card_still_ends_the_turn(monkeypatch):
-    # The other half of the requirement. The second send gets a fresh budget, and
-    # that budget is still a deadline: a model that stops answering after the card
-    # ends the turn one budget later instead of hanging it.
+    # The send after the card gets a fresh budget. A model that stops answering at
+    # that point still ends the turn when that budget runs out.
     monkeypatch.setattr(orch_mod, "_FALLBACK_BUDGET_SECONDS", _SHORT_BUDGET)
     blocker = _BlockingProvider(before=[_tool_then("card")])
     orch, conv = _build(
@@ -474,9 +473,10 @@ def test_a_model_that_hangs_after_a_late_card_still_ends_the_turn(monkeypatch):
 
 
 def test_one_sends_walk_shares_one_budget_across_every_candidate(monkeypatch):
-    # The budget restarts for each send and never for each candidate. Three hanging
-    # candidates must not get a budget each: the first one uses it all, so the walk
-    # ends there and the turn fails after one budget instead of three.
+    # All the candidates one send tries share one budget. Here the first of three
+    # hanging candidates uses the whole budget, so the walk ends after it. The test
+    # checks that the third candidate is never tried and that the turn fails after
+    # about one budget.
     monkeypatch.setattr(orch_mod, "_FALLBACK_BUDGET_SECONDS", _SHORT_BUDGET)
     blockers = {m: _BlockingProvider() for m in ("a", "b", "c")}
     orch, conv = _build(blockers, [_cand("a", "pa"), _cand("b", "pb"), _cand("c", "pc")])
@@ -487,6 +487,43 @@ def test_one_sends_walk_shares_one_budget_across_every_candidate(monkeypatch):
     assert blockers["a"].sends == 1
     assert blockers["c"].sends == 0
     assert elapsed < _SHORT_BUDGET + 0.5
+
+
+class _FailsAfter:
+    """Takes ``seconds`` to answer, then raises ProviderUnavailable. It stands in
+    for a candidate that spends part of the budget before it fails."""
+
+    def __init__(self, seconds: float):
+        self._seconds = seconds
+        self.sends = 0
+        self.timeouts: list[float | None] = []
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            native_tool_calling=True, max_context_tokens=1000,
+            supports_streaming=False, runs_off_device=False,
+        )
+
+    def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
+        self.sends += 1
+        self.timeouts.append(timeout)
+        time.sleep(self._seconds)
+        raise ProviderUnavailable("busy")
+
+
+def test_each_attempt_is_handed_what_is_left_of_the_budget(monkeypatch):
+    # Candidate a uses 0.25 s of a 0.6 s budget and fails. Candidate b hangs, and its
+    # deadline is the 0.35 s that a left. A whole new budget for b would let one
+    # send's walk run for 0.85 s.
+    monkeypatch.setattr(orch_mod, "_FALLBACK_BUDGET_SECONDS", 0.6)
+    a = _FailsAfter(0.25)
+    b = _BlockingProvider()
+    orch, conv = _build({"a": a, "b": b}, [_cand("a", "pa"), _cand("b", "pb")])
+    with pytest.raises(ProviderUnavailable):
+        orch.run_turn(conv)
+    assert a.timeouts[0] == pytest.approx(0.6, abs=0.05)
+    assert b.sends == 1
+    assert b.timeouts[0] is not None and b.timeouts[0] <= 0.6 - 0.25 + 1e-6
 
 
 # --- cooldown behaviour (D4 / [S-a]) ----------------------------------------
