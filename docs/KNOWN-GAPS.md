@@ -1309,3 +1309,31 @@ decisions and the numbered list of what is owed):**
   it is named here so it is a known bound rather than an assumption. Nothing on the
   Unix side is better in this respect — `process_group(0)` has the same shape of gap
   against a descendant that calls `setsid`, which is why `drain` survives one.
+
+**Raised by the bug hunt of 2026-09-29.** The defects from that hunt are entries 16
+to 90 in [`KNOWN-BUGS.md`](../KNOWN-BUGS.md). These are the questions it raised that
+need a decision rather than a fix.
+
+- **What Stop should end.** `conversation.stop` ends the turn's consent and does not
+  end the running job. After Stop the core still makes model requests and streams
+  their text, and a tool that needs no card still runs (KNOWN-BUGS 22 and 23). The
+  decision is whether Stop ends the job at the next step boundary, and if it does,
+  whether the stopped text is kept or dropped.
+- **An unanswered message after a crash.** When the engine dies mid-turn, the
+  person's message is stored with no answer. The next turn sends it next to the new
+  message as two user messages in a row, and the model may act on the old request.
+  The choice is between dropping it, marking it, or asking the person.
+- **Models with no quality rank are ordered two opposite ways.** A model from a
+  custom server gets no rank and sorts ahead of every ranked cloud model in
+  quality-first. An unranked model listed by a cloud provider gets 80 and sorts last.
+  The same model behind a proxy lands first one way and last the other.
+- **Falling forward after a preamble.** Once a round has streamed any text, a later
+  round that fails without showing anything does not move to a sibling model on the
+  same provider, and the turn fails. The comment says a stream that died before
+  showing anything falls forward, which is only true for the first round.
+- **A pairing binds a sender, not a chat.** A paired person writing in a Telegram
+  group would be answered in the group, with the phone history in context. Telegram's
+  group delivery was not observed, so this is not yet a defect.
+- **Knowledge search needs an index before phase 3 lands.** Search is a full scan in
+  Python on the engine thread, and it passes one second at about 12,000 chunks
+  (KNOWN-BUGS 88). Nothing on master adds documents yet.
