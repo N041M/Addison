@@ -40,7 +40,12 @@ from agent_core.providers.base import (
     open_stream,
     request_with_retry,
 )
-from agent_core.providers.tool_names import tool_id_for, wire_name, wire_names
+from agent_core.providers.tool_names import (
+    replayed_tool_ids,
+    tool_id_for,
+    wire_name,
+    wire_names,
+)
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _TIMEOUT_SECONDS = 60.0
@@ -105,10 +110,11 @@ class GoogleProvider:
         system = _extract_system(messages)
         if system:
             body["systemInstruction"] = {"parts": [{"text": system}]}
-        # The table from wire name back to tool id, for mapping the reply. Built
-        # before anything is sent, because it refuses two tools that would share a
-        # name.
-        names = wire_names(d.id for d in tools)
+        # The table from wire name back to tool id, for mapping the reply. It is
+        # built before anything is sent, because it refuses two offered tools that
+        # would share a name. The replayed past calls are in it too, so a hidden
+        # tool the model names from history maps back to its real id.
+        names = wire_names((d.id for d in tools), replayed_tool_ids(messages))
         tool_blocks = _translate_tools(tools)
         if tool_blocks:
             body["tools"] = tool_blocks

@@ -28,7 +28,7 @@ from agent_core.mcp_catalog import McpCatalog, mcp_tool_id
 from agent_core.mcp_client import DiscoveredTool
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
-from agent_core.policy import PolicyMode
+from agent_core.policy import PolicyMode, TurnSurface
 from agent_core.profiles import DEVELOPER, SIMPLE
 from agent_core.providers import anthropic_provider, google_provider, openai_provider
 from agent_core.providers.anthropic_provider import AnthropicProvider
@@ -44,12 +44,13 @@ from agent_core.providers.router import ModelRouter
 from agent_core.providers.tool_names import (
     SAME_NAME_REFUSAL,
     WIRE_NAME_MAX_CHARS,
+    replayed_tool_ids,
     tool_id_for,
     wire_name,
     wire_names,
 )
 from agent_core.snapshots.undo_manager import UndoManager
-from agent_core.tools.registry import ToolRegistry
+from agent_core.tools.registry import DEV_ONLY_REFUSAL, REMOTE_REFUSAL, ToolRegistry
 from tests.test_mcp_dispatch import FakeToolServer
 
 # --- the vendors' published rules, one pattern each ------------------------
@@ -298,29 +299,132 @@ def test_a_name_the_table_does_not_hold_comes_back_as_it_arrived():
     assert tool_id_for(MCP_WIRE, None) == MCP_WIRE
 
 
-def test_two_ids_that_would_share_a_name_are_refused_before_anything_is_sent():
+def test_two_ids_that_would_share_a_name_are_refused():
     """A valid id that equals another id's rewritten name is the one collision a
     test can build on purpose. Sending both would give the vendor two tools with
     one name, which it refuses, and a reply naming it could not be mapped back.
+    The sentence names the control that exists, which is Remove in the Tool
+    servers section of Settings.
 
     Mutation: remove the check in ``wire_names`` and no exception is raised."""
     with pytest.raises(ProviderRequestRejected) as raised:
         wire_names([MCP_WIRE, MCP_ID])
     assert str(raised.value) == SAME_NAME_REFUSAL
+    assert "Remove one of your tool servers in Settings" in SAME_NAME_REFUSAL
 
+
+def make_provider(kind: str, client: httpx.Client):
+    if kind == "anthropic":
+        return AnthropicProvider(api_key_getter=lambda: "sk-test", client=client)
+    if kind == "openai":
+        return OpenAIProvider(model="gpt-4.1", api_key_getter=lambda: "sk-test", client=client)
+    return GoogleProvider(model="gemini-2.5-pro", api_key_getter=lambda: "sk-goog", client=client)
+
+
+ADAPTERS = ["anthropic", "openai", "google"]
+
+
+@pytest.mark.parametrize("kind", ADAPTERS)
+def test_every_adapter_refuses_a_shared_name_before_anything_is_sent(kind):
+    """Each adapter builds its table through ``wire_names`` and so inherits the
+    check.
+
+    Mutation: replace ``wire_names(...)`` in any one adapter's ``send`` with a
+    plain dict comprehension and that adapter's case fails."""
     seen: list[httpx.Request] = []
-    provider = AnthropicProvider(
-        api_key_getter=lambda: "sk-test", client=capturing_client({}, seen=seen)
-    )
+    provider = make_provider(kind, capturing_client({}, seen=seen))
 
     class Impostor:
         id = MCP_WIRE
         description = "Looks like another tool's name."
         parameters_schema = SCHEMA
 
-    with pytest.raises(ProviderRequestRejected):
+    with pytest.raises(ProviderRequestRejected) as raised:
         provider.send([Message(role="user", content="hi")], [Impostor(), mcp_definition()])
+    assert str(raised.value) == SAME_NAME_REFUSAL
     assert seen == [], "the refusal happens before any request leaves"
+
+
+# ---------------------------------------------------------------------------
+# Past calls: a tool that is registered and not offered
+# ---------------------------------------------------------------------------
+
+
+def test_the_table_holds_replayed_calls_and_offered_tools_keep_their_names():
+    """A replayed call's id maps back even when its tool is not offered. An offered
+    tool keeps its name when a past id would claim the same one, and a past id
+    never causes a refusal, because removing a tool server cannot remove history.
+
+    Mutations: drop the ``past_ids`` loop and the first assertion fails. Let a past
+    id overwrite an offered one and the second fails. Run past ids through the
+    collision check and the third raises."""
+    assert wire_names([], past_ids=[MCP_ID]) == {MCP_WIRE: MCP_ID}
+    assert wire_names([MCP_WIRE], past_ids=[MCP_ID]) == {MCP_WIRE: MCP_WIRE}
+    assert wire_names([], past_ids=[MCP_WIRE, MCP_ID]) == {MCP_WIRE: MCP_WIRE}
+
+
+def test_the_replayed_ids_come_from_tool_calls_only():
+    """Only ``Message.tool_calls`` goes out on the wire. ``past_tool_calls`` is the
+    reloaded record that no adapter may read, so its ids stay out of the table.
+
+    Mutation: read ``past_tool_calls`` as well and this fails."""
+    reloaded = Message(
+        role="assistant",
+        content="",
+        past_tool_calls=[ToolCallRequest(id="old", tool_id="mcp:Old:gone", args={})],
+    )
+    assert replayed_tool_ids(history() + [reloaded]) == [MCP_ID]
+
+
+_REPLY_NAMING_THE_PAST_TOOL = {
+    "anthropic": {
+        "content": [{"type": "tool_use", "id": "toolu_5", "name": MCP_WIRE, "input": {}}],
+        "stop_reason": "tool_use",
+    },
+    "openai": {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_5",
+                            "type": "function",
+                            "function": {"name": MCP_WIRE, "arguments": "{}"},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    },
+    "google": {
+        "candidates": [
+            {
+                "content": {"parts": [{"functionCall": {"name": MCP_WIRE, "args": {}}}]},
+                "finishReason": "STOP",
+            }
+        ]
+    },
+}
+
+
+@pytest.mark.parametrize("kind", ADAPTERS)
+def test_every_adapter_maps_a_call_to_a_tool_it_no_longer_offers_back_to_the_real_id(kind):
+    """The request offers no tools, as after a switch to Simple, and the history
+    holds a past call to the tool-server tool. The model names that tool by the
+    wire name the history showed it, and the adapter hands back the real id.
+
+    Mutation: drop ``replayed_tool_ids(messages)`` from any one adapter's ``send``
+    and that adapter's case returns the wire name."""
+    seen: list[httpx.Request] = []
+    provider = make_provider(kind, capturing_client(_REPLY_NAMING_THE_PAST_TOOL[kind], seen=seen))
+
+    response = provider.send(history(), [])
+
+    assert "tools" not in json.loads(seen[0].content)
+    (call,) = response.tool_calls
+    assert call.tool_id == MCP_ID
 
 
 # ---------------------------------------------------------------------------
@@ -715,3 +819,89 @@ def test_a_turn_on_anthropic_runs_the_tool_and_replays_it_under_the_same_name(tm
     }
     assert replay["messages"][2]["content"][0]["tool_use_id"] == "toolu_9"
     assert "found: plan.md" in replay["messages"][2]["content"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    "mode, surface, refusal, outcome",
+    [
+        pytest.param(PolicyMode.SAFE, TurnSurface.DESK, DEV_ONLY_REFUSAL, "dev_only", id="simple"),
+        pytest.param(
+            PolicyMode.OPEN, TurnSurface.REMOTE, REMOTE_REFUSAL, "not_callable", id="phone"
+        ),
+    ],
+)
+def test_a_hidden_tool_named_from_history_is_refused_and_audited_under_its_real_id(
+    mode, surface, refusal, outcome
+):
+    """The chat used the tool-server tool in Developer, and the next turn runs in
+    Simple, or arrives from the phone. The tool is registered and not offered. The
+    fake Messages API names it by the wire name the replayed history shows. The
+    adapter maps that name back to the real id, so the orchestrator gives the
+    dev-only or the phone refusal, and the ``tool_audit`` row carries the real id.
+    The tool server is never called. Before the table held past calls, the wire
+    name reached dispatch, the refusal was the unknown-tool sentence, and the row
+    recorded the wire name as ``not_callable``.
+
+    Mutation: drop ``replayed_tool_ids(messages)`` from the Anthropic adapter's
+    ``send`` and both cases fail."""
+    called: list[tuple] = []
+    registry = registry_with(
+        (SERVER_NAME, "search"),
+        call_tool=lambda *call: called.append(call),
+        endpoint_for=lambda server_id, name: SERVER_URL,
+    )
+    seen: list[httpx.Request] = []
+    first = sse(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 5, "output_tokens": 0}}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_7", "name": MCP_WIRE},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"q": "plan"}'},
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 3},
+        },
+    )
+    second = sse(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 9, "output_tokens": 0}}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "I can't use that here."},
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 2},
+        },
+    )
+    provider = AnthropicProvider(
+        api_key_getter=lambda: "sk-test", client=capturing_client(first, second, seen=seen)
+    )
+    rows: list[dict] = []
+    orchestrator = Orchestrator(
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+        tool_registry=registry,
+        permission_gate=PermissionGate(on_request=lambda *a, **k: PermissionStatus.GRANTED),
+        undo_manager=UndoManager(store=None, tool_registry=registry),
+        on_tool_audit=rows.append,
+    )
+    conversation = Conversation(id="conv-18b")
+    conversation.messages.extend(history())
+
+    orchestrator.run_turn(
+        conversation, requested_role=ModelRole.PRIMARY, mode=mode, surface=surface
+    )
+
+    assert "tools" not in json.loads(seen[0].content), "the tool is not offered"
+    assert called == [], "the tool server is never called"
+    results = [m for m in conversation.messages if m.role == "tool"]
+    assert results[-1].content == refusal
+    assert [(row["tool_id"], row["outcome"]) for row in rows] == [(MCP_ID, outcome)]

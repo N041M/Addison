@@ -30,12 +30,17 @@ OpenAI key.
   name fails it.
 - **A custom server keeps `max_tokens`.** Ollama's published list of supported
   fields has `max_tokens` and does not have `max_completion_tokens`.
-- **The rest of the request was checked against the same reference.** The adapter
-  sends no parameter the reference marks as unsupported on reasoning models. Two
-  things the check raised went to [KNOWN-GAPS](KNOWN-GAPS.md), under the bug hunt of
-  2026-09-29. One is whether the reasoning models accept the `system` role, which
-  the reference recommends replacing and does not say is refused. The other is
-  whether 4,096 tokens is enough room when reasoning counts against it.
+- **What else was checked.** The adapter never sends `stop`, which the reference
+  marks as unsupported on o3 and o4-mini. It never sends `temperature`, `top_p`, a
+  penalty, `logprobs`, `logit_bias` or `n` either. Whether every newer model accepts
+  `tools` on Chat Completions was not checked, and the register lists it as
+  unconfirmed. Microsoft's Azure reasoning guide says these models treat a `system`
+  message as a developer message, so the adapter keeps sending `system`.
+- **What the fix leaves open.** `max_completion_tokens` counts reasoning tokens, and
+  the adapter still allows 4,096. The review of the fix showed a reasoning pass that
+  uses all of it ending with no visible text. The cap, and whether Addison's effort
+  setting should reach OpenAI, are an owner question in
+  [KNOWN-GAPS](KNOWN-GAPS.md) under the bug hunt of 2026-09-29.
 
 ---
 
@@ -59,10 +64,19 @@ message on those two vendors fail with status 400.
 - **The name is the same on every request.** Past calls are replayed under it, so
   it cannot depend on anything but the id. A test pins literal names, which a
   per-process salted `hash()` would fail.
-- **A collision is refused before anything is sent.** The hash makes a shared name
-  unlikely but cannot rule one out. `wire_names` checks each request's tools, and
-  when two share a name the adapter sends nothing and the person is told to turn
-  off one tool server.
+- **A collision is refused before anything is sent.** Two different ids can still
+  get the same hash suffix. `wire_names` checks the tools each request offers. When
+  two of them share a name, the adapter sends nothing and the person is told to
+  remove one tool server in Settings.
+- **Past calls are in the table too.** A tool can be registered and not offered,
+  for example a tool-server tool after a switch from Developer to Simple in the
+  middle of a chat, or a tool outside the phone's list on a phone turn. The model
+  can still name it from the replayed history. The first version mapped only the
+  offered tools back, so such a call reached dispatch under its wire name and was
+  refused and recorded as an unknown tool. The table now holds the replayed calls'
+  ids as well, so the dev-only and phone refusals run and `tool_audit` records the
+  real id. The review of the fix found this. SAFE invariant 1 held before and after
+  the change.
 - **Gemini needed it too.** Its reference allows a colon in a declared function
   name and does not allow one in `functionCall.name` or `functionResponse.name`,
   and the adapter replays both.

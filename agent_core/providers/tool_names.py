@@ -39,13 +39,25 @@ function is pure, so an id gets the same name on every request. That matters
 because the adapters replay past tool calls from the conversation under their
 names, and a name that changed between two requests would no longer match.
 
-A 48-bit hash makes two ids sharing a name very unlikely, and :func:`wire_names`
-makes it impossible to send. It builds the per-request table from name back to id
-and refuses the request if two different ids would go out under one name.
+Two different ids can still end up with the same name. That takes a repeated
+12-digit suffix, or a valid id that happens to equal another id's rewritten name.
+:func:`wire_names` builds the per-request table from name back to id, and it
+refuses the request when two tools offered in it would go out under one name.
+
+The table also holds the ids of the past calls the request replays. A tool can be
+registered and still not be offered, for example a tool-server tool after the
+person switched from Developer to Simple in the middle of a chat, or any tool
+outside the phone's list on a phone turn. The model can still name such a tool,
+because the replayed history shows its wire name. With the past calls in the
+table, that name maps back to the real id. The orchestrator then refuses it with
+the dev-only or the phone refusal and records the real id in ``tool_audit``.
+Before the past calls were added to the table, the wire name reached the
+orchestrator unchanged, and the call was refused and recorded as an unknown tool
+under the wire name.
 
 :func:`tool_id_for` maps a name the model returned back to its tool id. A name that
-is not in the table comes back unchanged, which sends a tool that is no longer
-offered to the orchestrator's unknown-tool refusal exactly as before.
+is in neither part of the table comes back unchanged, and the orchestrator refuses
+it as an unknown tool exactly as before.
 
 The Anthropic, OpenAI and Google adapters use this module. The OpenAI adapter also
 serves the OpenAI-compatible custom server, so that server gets the same names. The
@@ -59,7 +71,7 @@ import hashlib
 import re
 from collections.abc import Iterable, Mapping
 
-from agent_core.providers.base import ProviderRequestRejected
+from agent_core.providers.base import Message, ProviderRequestRejected
 
 #: The longest name every vendor above accepts (OpenAI's limit).
 WIRE_NAME_MAX_CHARS = 64
@@ -77,10 +89,11 @@ _HASH_HEX_DIGITS = 12
 
 #: Said when two tools would reach the model under one name. Every such collision
 #: involves a rewritten id. In practice every rewritten id comes from a tool server,
-#: so the next step names tool servers.
+#: so the next step names the Tool servers section of Settings and its Remove
+#: button, which is the control that takes a server's tools away.
 SAME_NAME_REFUSAL = (
     "Two of your tools ended up with the same name, so Addison didn't send this. "
-    "Turn off one of your tool servers and try again."
+    "Remove one of your tool servers in Settings and try again."
 )
 
 
@@ -99,13 +112,20 @@ def wire_name(tool_id: str) -> str:
     return f"{readable}_{digest[:_HASH_HEX_DIGITS]}"
 
 
-def wire_names(tool_ids: Iterable[str]) -> dict[str, str]:
-    """The table from wire name back to tool id, for the tools one request offers.
+def wire_names(tool_ids: Iterable[str], past_ids: Iterable[str] = ()) -> dict[str, str]:
+    """The table from wire name back to tool id for one request.
 
-    Raises ``ProviderRequestRejected`` with :data:`SAME_NAME_REFUSAL` before
-    anything is sent when two different ids would share a name. The vendors refuse
-    duplicate tool names, and a reply naming one of them could not be mapped back
-    to the tool the model meant."""
+    ``tool_ids`` are the tools the request offers. Raises
+    ``ProviderRequestRejected`` with :data:`SAME_NAME_REFUSAL` before anything is
+    sent when two different ones would share a name. The vendors refuse duplicate
+    tool names, and a reply naming one of them could not be mapped back to the tool
+    the model meant.
+
+    ``past_ids`` are the ids of the past calls the request replays. Each fills in
+    its name only when no offered tool already holds that name, so an offered tool
+    always keeps its own name. A past id never causes a refusal. Removing a tool
+    server takes its tools out of the offer and leaves the history as it is, so a
+    refusal caused by the history would stay in that chat for good."""
     table: dict[str, str] = {}
     for tool_id in tool_ids:
         name = wire_name(tool_id)
@@ -113,7 +133,15 @@ def wire_names(tool_ids: Iterable[str]) -> dict[str, str]:
         if earlier is not None and earlier != tool_id:
             raise ProviderRequestRejected(SAME_NAME_REFUSAL)
         table[name] = tool_id
+    for tool_id in past_ids:
+        table.setdefault(wire_name(tool_id), tool_id)
     return table
+
+
+def replayed_tool_ids(messages: Iterable[Message]) -> list[str]:
+    """The ids of the past calls a request replays, in order. Only
+    ``Message.tool_calls`` goes out on the wire, so only those ids are read."""
+    return [call.tool_id for message in messages for call in message.tool_calls]
 
 
 def tool_id_for(name: str, table: Mapping[str, str] | None) -> str:

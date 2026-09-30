@@ -101,11 +101,15 @@ others are struck.
     field does not depend on the model. A custom OpenAI-compatible server is still
     sent `max_tokens: 4096`, because Ollama's list of supported fields does not
     include the newer one. The adapter picks the field from its own base URL. The
-    rest of the request was checked too. The adapter sends no parameter the
-    reference marks as unsupported on reasoning models. Whether those models
-    accept the `system` role is unverified, and
-    [`docs/KNOWN-GAPS.md`](docs/KNOWN-GAPS.md) records it. The tests are at the
-    end of `tests/test_openai_provider.py`.
+    adapter never sends `stop`, which the reference marks as unsupported on o3 and
+    o4-mini, and never sends `temperature`, `top_p`, a penalty, `logprobs`,
+    `logit_bias` or `n`. Whether every newer model accepts `tools` on Chat
+    Completions was not checked, and the Unconfirmed list below has it. The
+    adapter still sends the `system` role. Microsoft's Azure reasoning guide says
+    these models treat a system message as a developer message. Whether 4,096
+    tokens is enough once reasoning counts against it is an owner question in
+    [`docs/KNOWN-GAPS.md`](docs/KNOWN-GAPS.md). The tests are at the end of
+    `tests/test_openai_provider.py`.
     `agent_core/providers/openai_provider.py` (`send`, `_OFFICIAL_TOKEN_LIMIT_FIELD`)
 
 20. **"Run a model on this computer" never finishes on screen.** The window shows
