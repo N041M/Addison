@@ -293,16 +293,16 @@ and rebuilds in the same session.
   decide there, in code.
 
   **A restore point saved before a table joined capture restores that table as
-  empty** (decided 2026-09-30 with the fix for KNOWN-BUGS 16). Three tables joined
-  after restore points shipped on 2026-07-20: `mcp_servers` on 2026-08-06,
-  `automations` on 2026-08-07 and `channels` on 2026-08-22. A payload saved before
-  one of them has no entry for it. Until the fix the decoder refused such a payload,
-  so every install updated across those dates had lost all of its restore points,
-  including the permanent first one. The restore point records a moment when the
-  table had no rows, and restoring to that moment means none. Restoring a newer
-  payload saved while the table was empty already does the same thing, so this
-  produces no state a restore could not produce before. What emptying each table
-  does:
+  empty.** Three tables joined after restore points shipped on 2026-07-20:
+  `mcp_servers` on 2026-08-06, `automations` on 2026-08-07 and `channels` on
+  2026-08-22. A payload saved before one of them has no entry for it. Until
+  2026-09-30 the decoder refused such a payload (KNOWN-BUGS 16), so every install
+  updated across those dates had lost all of its restore points, including the
+  permanent first one. The table did not exist when the restore point was saved, so
+  it held no rows then, and a restore to that point leaves it with no rows now.
+  Restoring any newer restore point saved before the first tool server, automation
+  or phone connection was added already did exactly that, so the rule produces no
+  state a restore could not produce before. What emptying each table does:
 
   - `mcp_servers`: the servers are removed, and `_finish_restore` drops the tools
     they had registered.
@@ -321,7 +321,9 @@ and rebuilds in the same session.
   restored setup would then differ from the one the restore point recorded, and
   the walk could no longer tell that it had landed there. `scope.py` records every
   table set a build has written, and the decoder refuses any other shape, including
-  a payload that holds a table this build does not know.
+  a payload that holds a table this build does not know. `scope.py` also records the
+  columns that joined a captured table later and the default a restore fills in for
+  each, so the walk recognises a restore point saved before one of them.
 - **Never captured:** the keychain (G1), the transcript, `usage_log`,
   `action_snapshots`, `routine_runs`, `device_identity`, `config_snapshots`
   itself, **`tool_grants`**, and (step 5) **`workspace_trust`**: live consent

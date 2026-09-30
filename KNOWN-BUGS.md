@@ -56,14 +56,20 @@ others are struck.
     answered "You're back at the oldest setup Addison saved". All six rows restored
     by id. With the `3497faf^` database file wrecked, master answered that there was
     no saved restore point to rebuild from while six sat beside it, and the branch
-    rebuilt from them. A payload that lacks a later table now restores that table as empty,
-    and [`docs/SAFETY.md`](docs/SAFETY.md) ("What is captured") owns that decision.
+    rebuilt from them. A payload that lacks a later table now restores that table
+    as empty, and [`docs/SAFETY.md`](docs/SAFETY.md) ("What is captured") owns that
+    rule.
     The fix also had to make an older restore point's fingerprint comparable with
     the running setup. Without that, the walk lost its place after landing on one
-    and the next press went forward into the broken setup. One case is not covered.
-    A column that joined later (`routines.imported_at`, `channels.on_wake`) still
-    makes an older restore point that held such a row look different from the same
-    setup read now.
+    and the next press went forward into the broken setup. The review of the fix
+    found the same failure for a restore point holding a routine saved before
+    `routines.imported_at` joined (2026-08-15) or a phone connection saved before
+    `channels.on_wake` joined. After the walk landed on one, the next press restored
+    the broken setup. `scope.py` now records those columns and the default a restore
+    fills in. Databases from `475ed76^` and `12b70d5^` holding a routine were re-run
+    the same way. Before that change every press restored the same row again. With
+    it, the presses landed on the older working setup, then the first restore point,
+    then the bottom sentence.
     `agent_core/snapshots/snapshot_manager.py` (`_decode_payload`, `_fingerprints`) ·
     `agent_core/snapshots/scope.py`
 

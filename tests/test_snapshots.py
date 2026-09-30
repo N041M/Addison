@@ -33,6 +33,7 @@ from agent_core.memory.store import Store
 from agent_core.snapshots import snapshot_manager as sm
 from agent_core.snapshots.scope import (
     _CAPTURED_TABLES,
+    _COLUMNS_JOINED_LATER,
     _EXCLUDED_COLUMNS,
     _EXCLUDED_TABLES,
     _FIRST_CAPTURED_TABLES,
@@ -1920,15 +1921,18 @@ _OLDER_BUILDS: dict[str, tuple[str, ...]] = {
 
 
 class _OlderBuild:
-    """The real store, capturing only ``tables`` the way an older build did.
+    """The real store, capturing only ``tables``, and leaving each ``(table, column)``
+    in ``without`` out of every row, the way an older build did."""
 
-    Only the table set differs between the payloads those builds wrote and the ones
-    this build writes. One column also joined in that time (``routines.imported_at``,
-    2026-08-15), and these tests never put a routine in a payload."""
-
-    def __init__(self, real: Store, tables: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        real: Store,
+        tables: tuple[str, ...] | frozenset[str],
+        without: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         self._real = real
         self._tables = tables
+        self._without = without
         self.db_path = real.db_path
 
     def __getattr__(self, name: str):
@@ -1936,7 +1940,14 @@ class _OlderBuild:
 
     def read_config_state(self) -> dict[str, list[dict[str, Any]]]:
         state = self._real.read_config_state()
-        return {table: rows for table, rows in state.items() if table in self._tables}
+        older = {table: rows for table, rows in state.items() if table in self._tables}
+        for table, column in self._without:
+            if table in older:
+                older[table] = [
+                    {key: value for key, value in row.items() if key != column}
+                    for row in older[table]
+                ]
+        return older
 
 
 def _skill_names(store: Store) -> list[str]:
@@ -1993,6 +2004,69 @@ def test_every_captured_table_is_recorded_in_the_history() -> None:
     assert _PAYLOAD_TABLE_SETS[-1] == frozenset(_CAPTURED_TABLES)
 
 
+# The columns each table carried in the build where it joined capture. Like
+# _OLDER_BUILDS, this comes from the git history of scope.py and is written out here.
+_COLUMNS_WHEN_THE_TABLE_JOINED: dict[str, set[str]] = {
+    "app_settings": {"key", "value", "updated_at"},
+    "provider_config": {"provider_id", "connected", "added_at", "base_url", "catalog_json",
+                        "last_check_ok", "updated_at"},
+    "skills": {"id", "name", "instructions", "enabled", "created_at"},
+    "widgets": {"id", "spec_json", "pinned", "position", "created_at", "created_in_mode"},
+    "routines": {"id", "name", "description", "plan_json", "created_from_conversation_id",
+                 "created_at", "updated_at", "run_count", "last_run_at", "created_in_mode"},
+    "mcp_servers": {"id", "name", "url", "transport", "enabled", "created_at"},
+    "automations": {"id", "name", "label", "command", "schedule_kind", "schedule_json",
+                    "created_in_mode", "created_at", "updated_at"},
+    "channels": {"id", "kind", "name", "enabled", "created_at"},
+}
+
+
+def test_every_captured_column_is_recorded_in_the_history() -> None:
+    """The column half of the guard for the next change. A column captured after its
+    table joined has to be in ``_COLUMNS_JOINED_LATER``, or a restore point saved
+    before it will never match the setup it puts back, and the walk will restore the
+    broken setup after landing on one.
+
+    Mutation: take ``routines.imported_at`` out of ``_COLUMNS_JOINED_LATER`` and this
+    fails."""
+    for table, columns in _CAPTURED_TABLES.items():
+        assert table in _COLUMNS_WHEN_THE_TABLE_JOINED, (
+            f"{table} joined capture: add the columns it joined with to "
+            f"_COLUMNS_WHEN_THE_TABLE_JOINED in this file."
+        )
+        later = set(columns) - _COLUMNS_WHEN_THE_TABLE_JOINED[table]
+        recorded = {column for owner, column, _ in _COLUMNS_JOINED_LATER if owner == table}
+        assert later == recorded, (
+            f"{table}: captured later but not recorded {sorted(later - recorded)}, "
+            f"recorded but not captured {sorted(recorded - later)}. Append a newly "
+            f"captured column to _COLUMNS_JOINED_LATER in agent_core/snapshots/scope.py."
+        )
+
+
+def _declared_default(text: str | None) -> Any:
+    """A column's ``dflt_value`` from ``PRAGMA table_info``, as the Python value SQLite
+    stores for it."""
+    if text is None or text.upper() == "NULL":
+        return None
+    if text.startswith("'") and text.endswith("'"):
+        return text[1:-1].replace("''", "'")
+    return int(text)
+
+
+def test_each_later_column_records_what_a_restore_fills_in(store: Store) -> None:
+    """A restore inserts an older row without the column, so SQLite fills in the
+    declared default. The record has to name exactly that value, or the image built
+    from it describes a setup no restore produces.
+
+    Mutation: record ``"answer"`` for ``channels.on_wake`` and this fails."""
+    for table, column, fill in _COLUMNS_JOINED_LATER:
+        defaults = {
+            row["name"]: row["dflt_value"]
+            for row in store._conn.execute(f"PRAGMA table_info({table})")
+        }
+        assert _declared_default(defaults[column]) == fill, (table, column)
+
+
 @pytest.mark.parametrize(
     "tables", _PAYLOAD_TABLE_SETS[:-1], ids=lambda tables: f"{len(tables)}-tables"
 )
@@ -2031,11 +2105,14 @@ def test_a_restore_point_saved_before_a_table_joined_capture_still_restores(
     assert saved.id in {payload["meta"]["id"] for payload in on_disk}
 
 
+@pytest.mark.parametrize(
+    "tables", _PAYLOAD_TABLE_SETS[:-1], ids=lambda tables: f"{len(tables)}-tables"
+)
 def test_the_one_action_restore_walks_back_through_restore_points_from_before_an_update(
-    store: Store,
+    store: Store, tables: frozenset[str]
 ) -> None:
-    """The entry's repro end to end. An install saves its first restore point and
-    two working setups on the build from before phone connections, then updates.
+    """The entry's repro end to end, once for every older table set. An install saves
+    its first restore point and two working setups on an older build, then updates.
     The person breaks something on the new build and presses the one-action restore
     three times.
 
@@ -2044,14 +2121,15 @@ def test_the_one_action_restore_walks_back_through_restore_points_from_before_an
     remembers which restore point it landed on and holds that position only while
     the setup still matches that restore point's saved fingerprint. An old restore
     point's fingerprint was taken over fewer tables, so it never matched a setup
-    read by this build, the position lapsed at once, and the second press went
-    forward into the broken setup.
+    read by this build, the position lapsed at once, and the second press restored
+    the broken setup.
 
     Mutations: the old decoder fails the first press with "couldn't read the
-    setups". Comparing only this build's own fingerprint in ``_walk_start`` sends
-    the second press forward to the broken setup."""
+    setups". Comparing only this build's own fingerprint in ``_walk_start`` makes
+    the second press restore the broken setup. So does letting ``_fingerprints``
+    build images for the newest older table set alone, in the 5- and 6-table cases."""
     clock = _Clock()
-    older = _manager(_OlderBuild(store, _OLDER_BUILDS["before-phone-connections"]), clock=clock)
+    older = _manager(_OlderBuild(store, tables), clock=clock)
     _add_skill(store, "A")
     older.mark_verified_working()
     _add_skill(store, "B")
@@ -2077,6 +2155,155 @@ def test_the_one_action_restore_walks_back_through_restore_points_from_before_an
     assert third.ok, third.error
     assert _skill_names(store) == []                           # the first restore point
     assert third.detail == sm._RESTORED_GENESIS
+
+
+@pytest.mark.parametrize(
+    "tables", _PAYLOAD_TABLE_SETS[:-1], ids=lambda tables: f"{len(tables)}-tables"
+)
+def test_a_broken_change_to_a_table_the_restore_point_lacks_is_undone(
+    store: Store, tables: frozenset[str]
+) -> None:
+    """The bad change adds only a phone connection, a table the older restore point
+    does not hold. Restoring that point empties the table, so the point is not the
+    setup already running, and the press has to restore it.
+
+    Mutations: drop the condition in ``_fingerprints`` that the tables an image
+    leaves out are empty here, or test that condition on the wrong tables, and the
+    older restore point counts as the running setup. The press then goes past it to
+    the first restore point."""
+    clock = _Clock()
+    older = _manager(_OlderBuild(store, tables), clock=clock)
+    _add_skill(store, "A")
+    older.mark_verified_working()
+
+    manager = _manager(store, created_the_database=False, clock=clock)
+    store.insert_channel(id="c1", kind="telegram", name="Stranger", created_at=1_700_000_000)
+    manager.mark_verified_working()                            # the broken setup answers
+
+    result = manager.restore_last_working()
+
+    assert result.ok, result.error
+    assert store.list_channels() == []
+    assert _skill_names(store) == ["A"]
+
+
+# The two ways a row can predate a column: a routine saved before routines had
+# imported_at, and a phone connection saved before channels had on_wake.
+_ROW_BEFORE_A_COLUMN = {
+    "routine-before-imported-at": (
+        _OLDER_BUILDS["before-phone-connections"], (("routines", "imported_at"),)
+    ),
+    "channel-before-on-wake": (
+        tuple(_CAPTURED_TABLES), (("channels", "on_wake"),)
+    ),
+}
+
+
+def _a_row_of_each_kind(store: Store) -> None:
+    store.insert_routine(id="r1", name="Morning", description="Weather and diary",
+                         plan_json={"steps": []}, created_from_conversation_id=None,
+                         created_at=1_700_000_000)
+    store.insert_channel(id="c1", kind="telegram", name="My phone", created_at=1_700_000_000)
+
+
+@pytest.mark.parametrize("shape", sorted(_ROW_BEFORE_A_COLUMN))
+def test_the_walk_keeps_its_place_on_a_restore_point_saved_before_a_column_joined(
+    store: Store, shape: str
+) -> None:
+    """Found by the review of the fix for 16. The older restore point holds a row
+    that has no key for a column added later. A restore fills in that column's
+    default, so the setup read back has a key the restore point never had. Before
+    the column record existed, no fingerprint matched, the walk forgot where it had
+    landed, and the third press restored the broken setup with the ordinary success
+    sentence.
+
+    Mutations: take the entry out of ``_COLUMNS_JOINED_LATER``, or stop building the
+    column images in ``_fingerprints``, and the third press restores the broken
+    setup."""
+    tables, without = _ROW_BEFORE_A_COLUMN[shape]
+    clock = _Clock()
+    _a_row_of_each_kind(store)
+    older = _manager(_OlderBuild(store, tables, without), clock=clock)
+    _add_skill(store, "A")
+    older.mark_verified_working()
+
+    manager = _manager(store, created_the_database=False, clock=clock)
+    _add_skill(store, "B")
+    manager.mark_verified_working()
+    _add_skill(store, "Broken")
+    manager.mark_verified_working()
+
+    first = manager.restore_last_working()
+    assert first.ok, first.error
+    assert _skill_names(store) == ["A", "B"]
+    second = manager.restore_last_working()
+    assert second.ok, second.error
+    assert _skill_names(store) == ["A"]
+
+    third = manager.restore_last_working()
+
+    assert "Broken" not in _skill_names(store)
+    assert _skill_names(store) == []
+    assert third.ok, third.error
+
+
+def test_a_turn_can_prove_a_permanent_restore_point_that_holds_a_routine_from_before_imports(
+    store: Store,
+) -> None:
+    """The permanent bottom row of an install upgraded before 2026-08-15 holds its
+    routines without ``imported_at``. A turn on exactly that setup has to prove it,
+    or it stays unproven for good.
+
+    Mutation: stop building the column images in ``_fingerprints`` and the row stays
+    unproven."""
+    clock = _Clock()
+    store.insert_routine(id="r1", name="Morning", description="Weather and diary",
+                         plan_json={"steps": []}, created_from_conversation_id=None,
+                         created_at=1_700_000_000)
+    older = _manager(
+        _OlderBuild(store, _OLDER_BUILDS["before-automations"], (("routines", "imported_at"),)),
+        clock=clock,
+        created_the_database=False,
+    )
+    (bottom,) = older.list()
+    assert bottom["reason"] == "pre_upgrade" and not bottom["verified_working"]
+
+    manager = _manager(store, created_the_database=False, clock=clock)
+    manager.mark_verified_working()
+
+    row = store.get_config_snapshot(bottom["id"])
+    assert row is not None and row.verified_working
+
+
+def test_a_column_changed_since_the_restore_point_is_not_mistaken_for_its_default(
+    store: Store,
+) -> None:
+    """The column images are only sound when every row holds the value a restore
+    fills in. Here the person switched the phone connection to answer while the
+    computer sleeps, after an older build saved a restore point without that column.
+    Restoring the point puts back "decline", so it is a real change and the press has
+    to make it.
+
+    Mutation: drop a column from the image whatever its value, and the restore
+    point counts as the running setup. The press then goes past it to the first
+    restore point."""
+    clock = _Clock()
+    store.insert_channel(id="c1", kind="telegram", name="My phone", created_at=1_700_000_000)
+    older = _manager(_OlderBuild(store, tuple(_CAPTURED_TABLES), (("channels", "on_wake"),)),
+                     clock=clock)
+    _add_skill(store, "A")
+    older.mark_verified_working()
+
+    manager = _manager(store, created_the_database=False, clock=clock)
+    store.set_channel_on_wake("c1", "answer")
+    manager.mark_verified_working()
+
+    result = manager.restore_last_working()
+
+    assert result.ok, result.error
+    assert _skill_names(store) == ["A"]
+    (channel,) = store.list_channels()
+    assert channel["on_wake"] == "decline"
 
 
 def _two_older_working_setups(store: Store, clock: _Clock, **kwargs) -> SnapshotManager:

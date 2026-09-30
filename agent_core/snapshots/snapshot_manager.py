@@ -31,7 +31,11 @@ from pathlib import Path
 from typing import Any
 
 from agent_core.snapshots.model import ConfigSnapshot, RestoreResult
-from agent_core.snapshots.scope import _CAPTURED_TABLES, _PAYLOAD_TABLE_SETS
+from agent_core.snapshots.scope import (
+    _CAPTURED_TABLES,
+    _COLUMNS_JOINED_LATER,
+    _PAYLOAD_TABLE_SETS,
+)
 
 PAYLOAD_VERSION = 1
 
@@ -216,31 +220,54 @@ def _fingerprints(tables: dict) -> frozenset[str]:
     """Every fingerprint a restore point holding the configuration in ``tables`` can
     carry. ``tables`` is a full row image from ``read_config_state``.
 
-    An older build's restore point lacks the tables that joined capture after it,
-    and its fingerprint was taken over the tables it has. It still holds this
-    configuration when the tables it lacks are empty here, because restoring it
-    empties them. So every comparison between a saved fingerprint and the
-    configuration running now asks whether the saved one is in this set.
+    An older build's restore point lacks the tables and columns that joined capture
+    after it, and its fingerprint was taken over what it has. It still holds this
+    configuration when restoring it would produce exactly this configuration. That
+    is true when each table it lacks is empty here, and when each column it lacks
+    holds, in every row here, the value a restore fills in for it
+    (``scope._COLUMNS_JOINED_LATER``). So every comparison between a saved
+    fingerprint and the configuration running now asks whether the saved one is in
+    this set.
+
+    One image is built for each table set a build wrote and each point in the column
+    history, and an image is only added when the conditions above hold. Dropping a
+    table that has rows, or a column whose value differs from what a restore fills
+    in, would describe a restore point that does not hold this configuration. The
+    walk would then skip a restore point that changes something, or stay below one it
+    had left.
 
     Comparing against ``_fingerprint(tables)`` alone made every older restore point
-    look different from the setup it would put back. After the walk restored one,
-    the position it remembers lapsed at once, and the next press went forward into
-    the setup the person was escaping (KNOWN-BUGS 16).
-
-    A column that joined later is not covered. An older row without it hashes
-    differently from the same row read now, so the two setups look different when
-    they are the same. The mismatch only ever makes identical setups look
-    different. Two columns are in that position, ``routines.imported_at``
-    (2026-08-15) and ``channels.on_wake`` (2026-08-22, the day channels joined),
-    and each matters only for a restore point that held a row in its table."""
+    look different from the setup it would put back. After the walk landed on one,
+    it forgot where it had landed, and the next press restored the newest working
+    setup, which can be the broken one the person was escaping (KNOWN-BUGS 16 and
+    its review)."""
     found = {_fingerprint(tables)}
     for table_set in _PAYLOAD_TABLE_SETS:
         if any(rows for table, rows in tables.items() if table not in table_set):
             continue
-        found.add(
-            _fingerprint({table: rows for table, rows in tables.items() if table in table_set})
-        )
+        kept = {table: rows for table, rows in tables.items() if table in table_set}
+        for joined in range(len(_COLUMNS_JOINED_LATER) + 1):
+            image = _without_columns(kept, _COLUMNS_JOINED_LATER[joined:])
+            if image is not None:
+                found.add(_fingerprint(image))
     return frozenset(found)
+
+
+def _without_columns(tables: dict, columns: tuple) -> dict | None:
+    """``tables`` with each ``(table, column, fill)`` in ``columns`` taken out of every
+    row, or ``None`` when some row holds a value other than ``fill`` there. A restore
+    of a row without the column puts ``fill`` back, so only then does the image hold
+    the same configuration."""
+    image = dict(tables)
+    for table, column, fill in columns:
+        rows = image.get(table)
+        if not rows:
+            continue
+        if any(row.get(column) != fill for row in rows):
+            return None
+        image[table] = [{key: value for key, value in row.items() if key != column}
+                        for row in rows]
+    return image
 
 
 def _decode_payload(raw: str) -> dict | None:

@@ -15,8 +15,8 @@ place here is a finding a future session would otherwise rediscover the hard way
 ## What shipped 09-30: restore points from before an update can be restored again
 
 This fixes KNOWN-BUGS 16, and [`SAFETY.md`](SAFETY.md) ("What is captured") owns the
-decision that a table a payload lacks restores as empty. What belongs here is what
-the fix found.
+rule that a table a payload lacks restores as empty. What belongs here is what the
+fix and its review found.
 
 **The decoder required every captured table, and a test asserted that it did.**
 `mcp_servers`, `automations` and `channels` joined capture after restore points
@@ -51,11 +51,25 @@ restored the same row on every press. Booting the old build's own core first, as
 app does, removed the effect. Real installs always have the key, because it is set
 before the first restore point is written.
 
-**Still open.** A column that joined later (`routines.imported_at` on 2026-08-15,
-`channels.on_wake` on 2026-08-22) still makes an older restore point that held such a
-row look different from the same setup read now. The mismatch only ever makes
-identical setups look different, and the walk can still lose its place on such a
-restore point.
+**The review found the same failure one level down, in columns.** The first version
+of `_fingerprints` handled tables only, and its docstring called a column that joined
+later a case where identical setups merely look different. That was wrong. A restore
+point saved before `routines.imported_at` (2026-08-15) holds routine rows with no such
+key, and a restore fills in NULL. After the walk landed on one, no fingerprint matched,
+and the next press restored the broken setup with the ordinary success sentence. The
+same holds for `channels.on_wake` (2026-08-22). Real databases from the builds before
+2026-08-15, opened over stdio, showed the walk restoring the same row on every press.
+`scope.py` now records `_COLUMNS_JOINED_LATER` with the default a restore fills in,
+`_fingerprints` builds an image for each point in that history, and
+`test_every_captured_column_is_recorded_in_the_history` fails when a captured column is
+not recorded.
+
+**The review also found conditions no test pinned.** Deleting the check that the tables
+an image leaves out are empty, checking it on the wrong tables, or building images for
+the newest older table set alone each left the suite green. The walk tests had only used
+7-table restore points. They now run for every older table set, and a new test covers a
+broken change confined to a table the restore point lacks. Each of the three mutations
+now fails a test.
 
 ---
 
