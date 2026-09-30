@@ -135,6 +135,17 @@ others are struck.
     `agent_core/memory/store.py` (`record_secret_presence`) ·
     `agent_core/snapshots/snapshot_manager.py`
 
+95. **Running a routine after a restore sends the next restore press forward.**
+    A routine run writes `run_count` and `last_run_at` (`touch_routine_run_stats`),
+    and both columns are captured. After the walk lands on a restore point, one
+    routine run makes the running setup differ from it, the walk forgets its
+    place, and the next press can restore the broken setup the person was
+    escaping. A randomised walk test that runs a routine now and then failed 87 of
+    150 histories this way. Found by the second review of the fix for 16. Added
+    2026-09-30, after the hunt.
+    `agent_core/memory/store.py` (`touch_routine_run_stats`) ·
+    `agent_core/snapshots/scope.py`
+
 ### P2 — trust and lifecycle
 
 22. **After Stop, a tool that already has permission still runs.** Live repro:
@@ -736,6 +747,16 @@ others are struck.
     fixing 21, once the card's preview line started to show. Added 2026-09-30,
     after the hunt.
     `agent_core/main.py` (`_card_consequence`) · `agent_core/tools/read_web_page.py`
+
+96. **A rebuilt database loses each chat-made routine's link to its chat, and the
+    restore walk then forgets its place.** `apply_config_state` clears
+    `created_from_conversation_id` when that conversation is missing. The rebuild
+    from sidecar copies writes into a fresh database with no conversations, so the
+    restored setup differs from the restore point at once. Reproduced only by
+    deleting a conversation row directly, because the app cannot delete
+    conversations, and the cold-start rebuild in `main.py` was not driven. Found by
+    the second review of the fix for 16. Added 2026-09-30, after the hunt.
+    `agent_core/memory/store.py` (`apply_config_state`)
 
 ### Unconfirmed (reasoned from the code, not reproduced)
 
