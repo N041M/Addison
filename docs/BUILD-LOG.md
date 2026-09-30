@@ -12,6 +12,53 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-30: restore points from before an update can be restored again
+
+This fixes KNOWN-BUGS 16, and [`SAFETY.md`](SAFETY.md) ("What is captured") owns the
+decision that a table a payload lacks restores as empty. What belongs here is what
+the fix found.
+
+**The decoder required every captured table, and a test asserted that it did.**
+`mcp_servers`, `automations` and `channels` joined capture after restore points
+shipped. Each join made every restore point saved before it unreadable, and that
+included the permanent first one and the rebuild from sidecar copies after the
+database file is damaged. `test_decode_is_strict_about_missing_tables_and_bad_row_types`
+deleted a table from a payload and expected a refusal, so the suite held the defect
+in place. It was replaced by `test_decode_still_refuses_a_damaged_payload`, which
+keeps every refusal that guards against damage.
+
+**Fixing the decoder alone left a walk that went forward.** The walk decides where it
+stands by comparing a restore point's saved fingerprint with the fingerprint of the
+running setup. An older restore point's fingerprint was taken over fewer tables, so it
+never matched. After the one-action restore landed on one, the walk forgot its place,
+and the next press restored the broken setup the person was escaping. The test for the
+entry's repro went red in exactly that way with only the decoder fixed.
+`_fingerprints` now returns every fingerprint a restore point of the running setup can
+carry, and all seven comparison sites use it. Each site has its own test, and each
+test goes red when its site alone is reverted.
+
+**The next table cannot do this again without a red test.** `scope.py` records the
+table set every build has written. The decoder accepts only those sets and refuses a
+table it does not know. `test_every_captured_table_is_recorded_in_the_history` fails
+when a table is added to `_CAPTURED_TABLES` without being recorded, and the
+restore test runs once for every recorded older set.
+
+**A trap in the repro harness.** The first repro saved old restore points through
+`Store` and `SnapshotManager` directly, skipping the old build's core. That database
+never had `widgets_seeded`, the one setting a restore preserves. Every restore then
+landed on a setup that differed from its restore point by that one key, and the walk
+restored the same row on every press. Booting the old build's own core first, as the
+app does, removed the effect. Real installs always have the key, because it is set
+before the first restore point is written.
+
+**Still open.** A column that joined later (`routines.imported_at` on 2026-08-15,
+`channels.on_wake` on 2026-08-22) still makes an older restore point that held such a
+row look different from the same setup read now. The mismatch only ever makes
+identical setups look different, and the walk can still lose its place on such a
+restore point.
+
+---
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner

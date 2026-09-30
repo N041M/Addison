@@ -35,6 +35,9 @@ from agent_core.snapshots.scope import (
     _CAPTURED_TABLES,
     _EXCLUDED_COLUMNS,
     _EXCLUDED_TABLES,
+    _FIRST_CAPTURED_TABLES,
+    _JOINED_CAPTURE_LATER,
+    _PAYLOAD_TABLE_SETS,
 )
 from agent_core.snapshots.snapshot_manager import (
     REASONS,
@@ -1815,14 +1818,31 @@ def test_payload_version_newer_than_this_build_is_rejected() -> None:
     assert sm._decode_payload(json.dumps(payload)) is None
 
 
-def test_decode_is_strict_about_missing_tables_and_bad_row_types() -> None:
+def test_decode_still_refuses_a_damaged_payload() -> None:
+    """A restore never half-applies, so accepting older shapes must not let a
+    damaged payload through. This replaced a test that also required every captured
+    table, which was the defect in KNOWN-BUGS 16.
+
+    Mutations: accept any subset of the captured tables and the three shape cases
+    below decode. Skip the row checks for an older shape and the last case decodes."""
     assert sm._decode_payload("{ not json") is None
     assert sm._decode_payload("[]") is None
-    assert sm._decode_payload(json.dumps({"tables": {}})) is None
+    assert sm._decode_payload(json.dumps({"version": sm.PAYLOAD_VERSION, "tables": {}})) is None
 
-    truncated = _minimal_payload()
-    del truncated["tables"]["skills"]
-    assert sm._decode_payload(json.dumps(truncated)) is None
+    # Every build has written these five, so a payload without one is damaged.
+    no_skills = _minimal_payload()
+    del no_skills["tables"]["skills"]
+    assert sm._decode_payload(json.dumps(no_skills)) is None
+
+    # No build wrote phone connections without automations.
+    gap = _minimal_payload()
+    del gap["tables"]["automations"]
+    assert sm._decode_payload(json.dumps(gap)) is None
+
+    # The newest shape with one later table dropped is not an older shape either.
+    only_first = _minimal_payload()
+    del only_first["tables"]["mcp_servers"]
+    assert sm._decode_payload(json.dumps(only_first)) is None
 
     not_a_list = _minimal_payload()
     not_a_list["tables"]["skills"] = {"id": "s1"}
@@ -1836,6 +1856,28 @@ def test_decode_is_strict_about_missing_tables_and_bad_row_types() -> None:
     bad_value["tables"]["skills"] = [{"id": {"nested": True}}]
     assert sm._decode_payload(json.dumps(bad_value)) is None
 
+    older_and_damaged = _minimal_payload(_OLDER_BUILDS["before-tool-servers"])
+    older_and_damaged["tables"]["widgets"] = "not a list of rows"
+    assert sm._decode_payload(json.dumps(older_and_damaged)) is None
+
+
+def test_a_payload_holding_a_table_this_build_does_not_know_is_refused() -> None:
+    """Tables have only ever joined capture, never left it, so an unknown table can
+    only come from a newer build or from damage. Applying the tables this build
+    knows and dropping the rest would put back part of a newer build's setup. That
+    is the half-apply the version check already refuses, and a payload like this is
+    refused for the same reason.
+
+    Mutation: let the decoder ignore tables it does not know, as it did before
+    2026-09-30, and this decodes."""
+    newer = _minimal_payload()
+    newer["tables"]["garden_plans"] = []
+    assert sm._decode_payload(json.dumps(newer)) is None
+
+    older_plus_unknown = _minimal_payload(_OLDER_BUILDS["before-automations"])
+    older_plus_unknown["tables"]["garden_plans"] = []
+    assert sm._decode_payload(json.dumps(older_plus_unknown)) is None
+
 
 def test_a_payload_missing_a_later_added_column_still_decodes() -> None:
     """A column added by a future build must not invalidate the entire rollback
@@ -1845,13 +1887,342 @@ def test_a_payload_missing_a_later_added_column_still_decodes() -> None:
     assert sm._decode_payload(json.dumps(payload)) is not None
 
 
-def _minimal_payload() -> dict:
+def _minimal_payload(tables: tuple[str, ...] | None = None) -> dict:
+    """An empty payload holding ``tables``, or every table this build captures."""
     return {
         "version": sm.PAYLOAD_VERSION,
         "captured_at": 4102444800,
         "meta": {"id": "x", "trigger": "auto", "reason": "other"},
-        "tables": {table: [] for table in _CAPTURED_TABLES},
+        "tables": {table: [] for table in (tables or tuple(_CAPTURED_TABLES))},
     }
+
+
+# --- restore points saved by an older build (KNOWN-BUGS 16) -----------------
+#
+# Three tables joined capture after restore points shipped. A payload saved before
+# a table joined has no entry for it, and until 2026-09-30 the decoder refused every
+# such payload. Every install upgraded across those dates lost its whole rollback
+# history, including the permanent first restore point.
+
+# The tables each earlier build wrote into every payload. These come from the git
+# history of agent_core/snapshots/scope.py. They describe files already on people's
+# disks, so they are written out here instead of being derived from the module these
+# tests check.
+_FIRST_CAPTURED = ("app_settings", "provider_config", "skills", "widgets", "routines")
+_OLDER_BUILDS: dict[str, tuple[str, ...]] = {
+    # 2026-07-20 to 2026-08-05.
+    "before-tool-servers": _FIRST_CAPTURED,
+    # 2026-08-06.
+    "before-automations": _FIRST_CAPTURED + ("mcp_servers",),
+    # 2026-08-07 to 2026-08-21. The entry's own repro used the last build of this run.
+    "before-phone-connections": _FIRST_CAPTURED + ("mcp_servers", "automations"),
+}
+
+
+class _OlderBuild:
+    """The real store, capturing only ``tables`` the way an older build did.
+
+    Only the table set differs between the payloads those builds wrote and the ones
+    this build writes. One column also joined in that time (``routines.imported_at``,
+    2026-08-15), and these tests never put a routine in a payload."""
+
+    def __init__(self, real: Store, tables: tuple[str, ...]) -> None:
+        self._real = real
+        self._tables = tables
+        self.db_path = real.db_path
+
+    def __getattr__(self, name: str):
+        return getattr(self._real, name)
+
+    def read_config_state(self) -> dict[str, list[dict[str, Any]]]:
+        state = self._real.read_config_state()
+        return {table: rows for table, rows in state.items() if table in self._tables}
+
+
+def _skill_names(store: Store) -> list[str]:
+    return [skill["name"] for skill in store.list_skills()]
+
+
+def _add_skill(store: Store, name: str) -> None:
+    store.insert_skill(id=f"skill-{name}", name=name, instructions="Be brief.",
+                       enabled=True, created_at=1_700_000_000)
+
+
+def _fill_the_later_tables(store: Store) -> None:
+    """One row in each table that joined capture late, plus a paired phone."""
+    store.insert_mcp_server(id="m1", name="Design docs", url="https://tools.example/mcp",
+                            created_at=1_700_000_000)
+    store.insert_automation(
+        id="a1", name="Tidy downloads", label="com.addison.auto.tidy-downloads",
+        command="echo tidy", schedule_kind="interval", schedule_json=json.dumps({"minutes": 60}),
+        created_in_mode="open", created_at=1_700_000_000,
+    )
+    store.insert_channel(id="c1", kind="telegram", name="My phone", created_at=1_700_000_000)
+    store.insert_channel_pairing(id="p1", channel_id="c1", sender_id="42", label="Mira",
+                                 paired_at=1_700_000_000)
+
+
+def test_the_recorded_history_is_the_history_builds_actually_wrote() -> None:
+    """``scope._PAYLOAD_TABLE_SETS`` is a record of files already on disk, so it may
+    only grow at the end. Editing an older entry would make that build's restore
+    points unreadable again, or let a shape no build wrote through.
+
+    Mutation: move ``automations`` ahead of ``mcp_servers`` in
+    ``_JOINED_CAPTURE_LATER`` and this fails."""
+    assert _FIRST_CAPTURED_TABLES == _FIRST_CAPTURED
+    recorded = [set(tables) for tables in _PAYLOAD_TABLE_SETS[: len(_OLDER_BUILDS)]]
+    assert recorded == [set(tables) for tables in _OLDER_BUILDS.values()]
+
+
+def test_every_captured_table_is_recorded_in_the_history() -> None:
+    """The guard for the next table. A table added to ``_CAPTURED_TABLES`` has to be
+    appended to ``_JOINED_CAPTURE_LATER`` in the same change, and then every payload
+    saved before it keeps decoding and restoring (the test below walks each recorded
+    shape). Without this, the next table repeats KNOWN-BUGS 16.
+
+    Mutation: add a table to ``_CAPTURED_TABLES`` alone and this fails."""
+    history = _FIRST_CAPTURED_TABLES + _JOINED_CAPTURE_LATER
+    assert len(set(history)) == len(history), "a table is recorded twice"
+    assert set(history) == set(_CAPTURED_TABLES), (
+        f"captured but not recorded: {sorted(set(_CAPTURED_TABLES) - set(history))}; "
+        f"recorded but not captured: {sorted(set(history) - set(_CAPTURED_TABLES))}. "
+        f"Append a newly captured table to _JOINED_CAPTURE_LATER in "
+        f"agent_core/snapshots/scope.py, or restore points saved before it stop "
+        f"decoding."
+    )
+    assert _PAYLOAD_TABLE_SETS[-1] == frozenset(_CAPTURED_TABLES)
+
+
+@pytest.mark.parametrize(
+    "tables", _PAYLOAD_TABLE_SETS[:-1], ids=lambda tables: f"{len(tables)}-tables"
+)
+def test_a_restore_point_saved_before_a_table_joined_capture_still_restores(
+    store: Store, tables: frozenset[str]
+) -> None:
+    """The entry's own failure, once for every older table set scope.py records.
+    The restore point records a moment when the later tables had no rows, so
+    restoring it empties them. Restoring a newer payload saved while those tables
+    were empty does exactly the same. A paired phone goes with its channel row, as
+    it does on every restore.
+
+    The restore point is also found by a start with no usable database, which reads
+    only the copies beside it.
+
+    Mutation: restore the decoder's old rule, every captured table required, and
+    each case answers "That restore point can't be read"."""
+    clock = _Clock()
+    older = _manager(_OlderBuild(store, tuple(tables)), clock=clock)
+    _add_skill(store, "Then")
+    saved = older.capture(trigger="on_command", reason="user_request")
+
+    _add_skill(store, "Now")
+    _fill_the_later_tables(store)
+    manager = _manager(store, created_the_database=False, clock=clock)
+
+    result = manager.restore(saved.id)
+
+    assert result.ok, result.error
+    assert _skill_names(store) == ["Then"]
+    assert store.list_mcp_servers() == []
+    assert store.list_automations() == []
+    assert store.list_channels() == []
+    assert store.list_channel_pairings("c1") == []
+    on_disk = recover_payloads_from_disk(_sidecar_dir(manager))
+    assert saved.id in {payload["meta"]["id"] for payload in on_disk}
+
+
+def test_the_one_action_restore_walks_back_through_restore_points_from_before_an_update(
+    store: Store,
+) -> None:
+    """The entry's repro end to end. An install saves its first restore point and
+    two working setups on the build from before phone connections, then updates.
+    The person breaks something on the new build and presses the one-action restore
+    three times.
+
+    Each press has to land one working setup further back. The second press is the
+    one that went wrong once old restore points could be read at all. The walk
+    remembers which restore point it landed on and holds that position only while
+    the setup still matches that restore point's saved fingerprint. An old restore
+    point's fingerprint was taken over fewer tables, so it never matched a setup
+    read by this build, the position lapsed at once, and the second press went
+    forward into the broken setup.
+
+    Mutations: the old decoder fails the first press with "couldn't read the
+    setups". Comparing only this build's own fingerprint in ``_walk_start`` sends
+    the second press forward to the broken setup."""
+    clock = _Clock()
+    older = _manager(_OlderBuild(store, _OLDER_BUILDS["before-phone-connections"]), clock=clock)
+    _add_skill(store, "A")
+    older.mark_verified_working()
+    _add_skill(store, "B")
+    older.mark_verified_working()
+
+    manager = _manager(store, created_the_database=False, clock=clock)     # the update
+    store.insert_channel(id="c1", kind="telegram", name="Broken", created_at=1_700_000_000)
+    _add_skill(store, "Broken")
+    manager.mark_verified_working()                            # the broken setup answers
+
+    first = manager.restore_last_working()
+    assert first.ok, first.error
+    assert _skill_names(store) == ["A", "B"]
+    assert store.list_channels() == []
+    manager.mark_verified_working()                            # a turn on the restored setup
+
+    second = manager.restore_last_working()
+    assert second.ok, second.error
+    assert _skill_names(store) == ["A"]
+    manager.mark_verified_working()
+
+    third = manager.restore_last_working()
+    assert third.ok, third.error
+    assert _skill_names(store) == []                           # the first restore point
+    assert third.detail == sm._RESTORED_GENESIS
+
+
+def _two_older_working_setups(store: Store, clock: _Clock, **kwargs) -> SnapshotManager:
+    """An install on the build from before phone connections, with skill A working
+    and then skills A and B working. Returns the manager of the build it updates to,
+    still on A and B."""
+    older = _manager(
+        _OlderBuild(store, _OLDER_BUILDS["before-phone-connections"]), clock=clock, **kwargs
+    )
+    _add_skill(store, "A")
+    older.mark_verified_working()
+    _add_skill(store, "B")
+    older.mark_verified_working()
+    return _manager(store, created_the_database=False, clock=clock)
+
+
+def test_an_older_restore_point_of_the_running_setup_is_not_restored_again(
+    store: Store,
+) -> None:
+    """Straight after the update the newest working restore point holds the setup
+    that is running. Restoring it would change nothing, so the press goes one
+    further back.
+
+    Mutation: compare only this build's own fingerprint in the walk's skip, and
+    the press restores A and B again and reports that it went back."""
+    manager = _two_older_working_setups(store, _Clock())
+
+    result = manager.restore_last_working()
+
+    assert result.ok, result.error
+    assert _skill_names(store) == ["A"]
+
+
+def test_a_turn_after_the_update_does_not_save_a_second_copy_of_the_same_setup(
+    store: Store,
+) -> None:
+    """A hundred turns against an unchanged setup write one row. The newest working
+    row was saved by the older build, and it holds the setup the turn ran on.
+
+    Mutation: compare only this build's own fingerprint in ``mark_verified_working``
+    and the turn writes a new row."""
+    manager = _two_older_working_setups(store, _Clock())
+    before = len(manager.list())
+
+    assert manager.mark_verified_working() is None
+    assert len(manager.list()) == before
+
+
+def test_a_turn_can_prove_a_permanent_restore_point_saved_by_an_older_build(
+    store: Store,
+) -> None:
+    """An upgraded install's permanent bottom row starts unproven, and a turn that
+    runs on exactly that setup proves it. That has to work when the row was saved
+    before the later tables joined capture, or the row stays unproven for good.
+
+    Mutation: compare only this build's own fingerprint in
+    ``_permanent_row_matching`` and the row stays unproven."""
+    clock = _Clock()
+    older = _manager(
+        _OlderBuild(store, _OLDER_BUILDS["before-phone-connections"]),
+        clock=clock,
+        created_the_database=False,
+    )
+    (bottom,) = older.list()
+    assert bottom["reason"] == "pre_upgrade" and not bottom["verified_working"]
+
+    manager = _manager(store, created_the_database=False, clock=clock)
+    manager.mark_verified_working()
+
+    row = store.get_config_snapshot(bottom["id"])
+    assert row is not None and row.verified_working
+
+
+def test_a_press_after_picking_an_older_restore_point_by_hand_goes_further_back(
+    store: Store,
+) -> None:
+    """The person picks an unproven restore point from the list, saved by the older
+    build, and then presses the one-action restore. The press has to go below the
+    point they picked, which here is the first restore point.
+
+    Mutation: compare only this build's own fingerprint in
+    ``_start_below_the_full_list`` and the press goes forward to the broken setup."""
+    clock = _Clock()
+    older = _manager(_OlderBuild(store, _OLDER_BUILDS["before-phone-connections"]), clock=clock)
+    _add_skill(store, "A")
+    picked = older.capture(trigger="on_command", reason="user_request")
+    _add_skill(store, "B")
+    older.mark_verified_working()
+
+    manager = _manager(store, created_the_database=False, clock=clock)
+    _add_skill(store, "Broken")
+    manager.mark_verified_working()
+
+    by_hand = manager.restore(picked.id)
+    assert by_hand.ok, by_hand.error
+    assert _skill_names(store) == ["A"]
+
+    pressed = manager.restore_last_working()
+
+    assert pressed.ok, pressed.error
+    assert _skill_names(store) == []
+    assert pressed.detail == sm._RESTORED_GENESIS
+
+
+def test_the_disk_copies_keep_the_walk_position_on_an_older_restore_point(
+    store: Store,
+) -> None:
+    """The walk lands on a restore point the older build saved, and then the list of
+    working restore points stops reading. The next press falls back to the copies
+    beside the database, and it still has to go further back.
+
+    Mutation: compare only this build's own fingerprint in ``_payloads_below`` and
+    the press goes forward to the broken setup."""
+    clock = _Clock()
+    manager = _two_older_working_setups(store, clock)
+    _add_skill(store, "Broken")
+    manager.mark_verified_working()
+
+    first = manager.restore_last_working()
+    assert first.ok, first.error
+    assert _skill_names(store) == ["A", "B"]
+    manager.mark_verified_working()
+
+    damaged = _manager(_VerifiedRefsAreDamaged(store), created_the_database=False, clock=clock)
+    second = damaged.restore_last_working()
+
+    assert second.ok, second.error
+    assert _skill_names(store) == ["A"]
+
+
+def test_the_disk_copies_skip_an_older_restore_point_of_the_running_setup(
+    store: Store,
+) -> None:
+    """The same skip as the walk's, in the chooser the copies beside the database
+    go through when the list of working restore points cannot be read.
+
+    Mutation: compare only this build's own fingerprint in
+    ``select_payload_to_restore`` and the press restores A and B again."""
+    clock = _Clock()
+    _two_older_working_setups(store, clock)
+    damaged = _manager(_VerifiedRefsAreDamaged(store), created_the_database=False, clock=clock)
+
+    result = damaged.restore_last_working()
+
+    assert result.ok, result.error
+    assert _skill_names(store) == ["A"]
 
 
 # --- choosing a payload: the one function every restore path shares ---------
@@ -1894,7 +2265,9 @@ def test_selecting_a_payload_never_picks_the_config_already_running() -> None:
         _sidecar("turn_verified", verified=True, fingerprint="f-before", marker="earlier"),
     ]
 
-    chosen, is_verified = select_payload_to_restore(payloads, current_fingerprint="f-now")
+    chosen, is_verified = select_payload_to_restore(
+        payloads, current_fingerprints=frozenset({"f-now"})
+    )
 
     assert is_verified is True
     assert chosen is not None and chosen["meta"]["id"] == "id-earlier"

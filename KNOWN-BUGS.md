@@ -42,21 +42,29 @@ others are struck.
 
 ### P1 — broken features
 
-16. **Restore points saved before an update cannot be restored after it,
-    including the permanent first restore point.** Save restore points with the
-    build from just before messaging channels (`git archive 3497faf^`), then open
-    the same database with the current build. Every row is still listed. The
-    one-action restore answers "Addison couldn't read the setups it saved for
-    you", and restoring any row by id answers "That restore point can't be
-    read". The cause is that `_decode_payload` rejects a payload with any captured
-    table missing, and three tables were added after restore points shipped
-    (`mcp_servers` on 08-06, `automations` on 08-07, `channels` on 08-22). Adding
-    `"channels": []` to an old payload makes it decode. Every install upgraded
-    across those dates has lost all of its rollback history, and the next captured
-    table will do it again. The docstring already tolerates missing columns for
-    this exact reason. `tests/test_snapshots.py` has a test that asserts the
-    strict behaviour. **Reproduced by the coordinator.**
-    `agent_core/snapshots/snapshot_manager.py` (`_decode_payload`) ·
+16. ~~**Restore points saved before an update cannot be restored after it,
+    including the permanent first restore point.**~~ **RE-RUN GREEN 2026-09-30**,
+    on branch `claude/fix-restore-old-snapshots`. The entry's own repro ran once for
+    each older table set. The builds from `git archive 475ed76^`, `12b70d5^` and
+    `3497faf^` each created a database through their own core and saved a first
+    restore point, two working setups and two others. Each database was then opened
+    through the real core over stdio. On master (`21ff450`) every press of the
+    one-action restore answered "Addison couldn't read the setups it saved for you",
+    and every row restored by id answered "That restore point can't be read". On the
+    branch the first press skipped the setup already running and landed on the older
+    working setup, the second landed on the first restore point, and the third
+    answered "You're back at the oldest setup Addison saved". All six rows restored
+    by id. With the `3497faf^` database file wrecked, master answered that there was
+    no saved restore point to rebuild from while six sat beside it, and the branch
+    rebuilt from them. A payload that lacks a later table now restores that table as empty,
+    and [`docs/SAFETY.md`](docs/SAFETY.md) ("What is captured") owns that decision.
+    The fix also had to make an older restore point's fingerprint comparable with
+    the running setup. Without that, the walk lost its place after landing on one
+    and the next press went forward into the broken setup. One case is not covered.
+    A column that joined later (`routines.imported_at`, `channels.on_wake`) still
+    makes an older restore point that held such a row look different from the same
+    setup read now.
+    `agent_core/snapshots/snapshot_manager.py` (`_decode_payload`, `_fingerprints`) ·
     `agent_core/snapshots/scope.py`
 
 17. **A turn fails if the person takes more than two minutes to answer a

@@ -291,6 +291,37 @@ and rebuilds in the same session.
   Because restore is replace-all, an uncaptured new column would be silently reset
   to its default **by the recovery path**. Add a Phase-2 table or column, and you
   decide there, in code.
+
+  **A restore point saved before a table joined capture restores that table as
+  empty** (decided 2026-09-30 with the fix for KNOWN-BUGS 16). Three tables joined
+  after restore points shipped on 2026-07-20: `mcp_servers` on 2026-08-06,
+  `automations` on 2026-08-07 and `channels` on 2026-08-22. A payload saved before
+  one of them has no entry for it. Until the fix the decoder refused such a payload,
+  so every install updated across those dates had lost all of its restore points,
+  including the permanent first one. The restore point records a moment when the
+  table had no rows, and restoring to that moment means none. Restoring a newer
+  payload saved while the table was empty already does the same thing, so this
+  produces no state a restore could not produce before. What emptying each table
+  does:
+
+  - `mcp_servers`: the servers are removed, and `_finish_restore` drops the tools
+    they had registered.
+  - `automations`: the saved rows are removed. A job the OS already runs stays
+    armed, because a restore neither arms nor disarms anything. The Automations
+    section in Settings lists an armed job that has no row as "Running, but not
+    saved here" with a Switch off button, in every profile. That is the
+    reconcile-on-restore design of 2026-08-08 for a restore to a point from before
+    an automation was written.
+  - `channels`: the rows are removed, and their `channel_pairings` rows go with
+    them through the foreign key, as they do on every restore. `_finish_restore`
+    stops every poll loop. The channel's token stays in the keychain, as every key
+    does.
+
+  Leaving a missing table untouched was the alternative, and it was rejected. The
+  restored setup would then differ from the one the restore point recorded, and
+  the walk could no longer tell that it had landed there. `scope.py` records every
+  table set a build has written, and the decoder refuses any other shape, including
+  a payload that holds a table this build does not know.
 - **Never captured:** the keychain (G1), the transcript, `usage_log`,
   `action_snapshots`, `routine_runs`, `device_identity`, `config_snapshots`
   itself, **`tool_grants`**, and (step 5) **`workspace_trust`**: live consent

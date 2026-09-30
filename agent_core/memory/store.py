@@ -2271,6 +2271,12 @@ class Store:
         applies the declared default. ``_add_column_if_missing`` always supplies
         a default, so this is always well-defined.
 
+        MISSING TABLES. A captured table that ``state`` does not carry is emptied
+        and nothing is inserted into it. A payload saved before that table joined
+        capture has no entry for it, and ``snapshot_manager._decode_payload`` only
+        lets through the shapes older builds wrote (``scope._PAYLOAD_TABLE_SETS``).
+        docs/SAFETY.md ("What is captured") owns why empty is the right answer.
+
         Raises ``sqlite3.Error`` on failure, after rolling back. The caller
         (SnapshotManager.restore) turns that into a plain-language
         RestoreResult."""

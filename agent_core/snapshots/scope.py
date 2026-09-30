@@ -1,6 +1,9 @@
 """What a G3 snapshot captures — the declared table set and the declared column
 set (amendment §3, spec §4.9).
 
+It also records which tables joined capture after restore points shipped, because a
+payload saved before a table joined has no entry for it (``_PAYLOAD_TABLE_SETS``).
+
 A leaf module on purpose: it imports nothing but ``__future__``, so both
 ``memory/store.py`` (which builds and applies the row image) and
 ``snapshot_manager.py`` (which validates a decoded payload against it) can depend
@@ -63,6 +66,45 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
     # made, restorable without asserting anything about the world outside SQLite.
     "channels":        ("id", "kind", "name", "enabled", "on_wake", "created_at"),
 }
+
+# WHICH TABLES A PAYLOAD MAY LACK (KNOWN-BUGS 16, fixed 2026-09-30).
+#
+# Restore points shipped on 2026-07-20 capturing the five tables in
+# _FIRST_CAPTURED_TABLES. Three more joined capture later, and a payload saved before
+# a table joined has no entry for it. The decoder used to require every table in
+# _CAPTURED_TABLES, so each table that joined made every older restore point
+# unreadable, including the permanent first one.
+#
+# A payload that lacks a later table restores that table as empty
+# (Store.apply_config_state). docs/SAFETY.md ("What is captured") owns that decision,
+# including what it does to each of the three tables.
+#
+# The decoder accepts a payload only when its tables are exactly one of the sets a
+# build has written (_PAYLOAD_TABLE_SETS). It refuses a payload that lacks one of the
+# first five, one that lacks a later table while holding a table that joined after
+# it, and one that holds a table this build does not know. Damage is the only thing
+# that produces the first two. The third can only come from a newer build, and
+# applying part of a newer build's configuration is what the payload version check
+# already refuses.
+#
+# To add a captured table, add it to _CAPTURED_TABLES and append it to
+# _JOINED_CAPTURE_LATER in the same change. tests/test_snapshots.py fails until the
+# two agree, and it restores a payload of every older shape.
+_FIRST_CAPTURED_TABLES: tuple[str, ...] = (
+    "app_settings", "provider_config", "skills", "widgets", "routines",
+)
+_JOINED_CAPTURE_LATER: tuple[str, ...] = (
+    "mcp_servers",    # 2026-08-06, step 7 phase 1
+    "automations",    # 2026-08-07, step 8 phase 1
+    "channels",       # 2026-08-22, messaging channels phase 1
+)
+
+# Every table set a build has written into a payload, oldest first. The last is the
+# set this build writes.
+_PAYLOAD_TABLE_SETS: tuple[frozenset[str], ...] = tuple(
+    frozenset(_FIRST_CAPTURED_TABLES + _JOINED_CAPTURE_LATER[:joined])
+    for joined in range(len(_JOINED_CAPTURE_LATER) + 1)
+)
 
 # Deliberately NOT captured, each for a stated reason. A restore leaves all of
 # these byte-identical.

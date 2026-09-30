@@ -448,7 +448,10 @@ erDiagram
   - `created_in_mode` is **recorded for display only and never filters a query**; see the
     note below.
   - **The payload shape**, written byte-identically into `state_blob` and into the JSON
-    sidecar: `{"version", "captured_at", "captured_at_ns", "meta", "tables"}`. A *restore*
+    sidecar: `{"version", "captured_at", "captured_at_ns", "meta", "tables"}`. A payload
+    saved before a table joined capture has no entry for that table in `tables`, and a
+    restore empties that table ([SAFETY.md](SAFETY.md), "What is captured", owns the
+    rule). A *restore*
     reads only `version` and `tables`; `meta` is the row's **only backup**: it carries every
     column not derivable from `tables` (identity, provenance, the fingerprint, and the three
     flags plus `binary_ref`), because a rebuild from sidecars alone would otherwise quietly
