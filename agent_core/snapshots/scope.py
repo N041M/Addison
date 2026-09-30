@@ -164,7 +164,8 @@ _EXCLUDED_TABLES: dict[str, str] = {
     # evidence somebody is rolling back BECAUSE of. The likeliest reason to restore
     # after a provider goes wrong is the provider going wrong.
     "provider_attempts": "failure history; a restore must never rewrite what happened",
-    # KNOWN-BUGS 94, owner decision 2026-09-30, on the `secret_presence` reasoning.
+    # KNOWN-BUGS 94. On 2026-09-30 the owner chose to keep key answers for a provider
+    # with no row outside captured state, for the same reason as `secret_presence`.
     # A live key read and a key rejection are observations, and a turn writes them.
     # Kept here, a turn never changes captured state, so the restore walk still
     # recognises the restore point it landed on. A restore leaves them alone, so a

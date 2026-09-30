@@ -325,8 +325,9 @@ and rebuilds in the same session.
   columns that joined a captured table later and the default a restore fills in for
   each, so the walk recognises a restore point saved before one of them.
 
-  **A turn never writes captured state** (owner decision 2026-09-30, KNOWN-BUGS 94).
-  The walk holds its place only while the setup matches the restore point it landed
+  **A turn never writes captured state** (KNOWN-BUGS 94). On 2026-09-30 the owner
+  chose to keep what a key read proves for a provider with no row outside captured
+  state, and this rule is how the code carries that choice out. The walk holds its place only while the setup matches the restore point it landed
   on, so an automatic write during a turn sends the next press back to the newest
   working setup, which can be the broken one. What a key read or a rejected key
   proves goes to `provider_observations`, which no restore point captures, and to
