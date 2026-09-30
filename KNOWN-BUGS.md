@@ -695,6 +695,16 @@ others are struck.
       the sentence their own comment gives as the example.
     `docs/` · `tests/doc_claims.py`
 
+92. **The card for a web page read in a routine calls the address a command.**
+    When a routine's `read_web_page` step takes the per-invocation card, the card
+    reads "This time it wants to run: www.example.com". `_card_consequence` falls
+    back to the `run_command` wording whenever a call has a detail and the tool
+    has no sentence of its own, and `read_web_page` has none. The frontend also
+    splits on the "run: " prefix and draws the address as a command. Found while
+    fixing 21, once the card's preview line started to show. Added 2026-09-30,
+    after the hunt.
+    `agent_core/main.py` (`_card_consequence`) · `agent_core/tools/read_web_page.py`
+
 ### Unconfirmed (reasoned from the code, not reproduced)
 
 - The dialog stall in 39 could become a permanent deadlock if the window sends
