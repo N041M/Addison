@@ -314,7 +314,7 @@ def test_a_deadline_disables_the_internal_connect_retry():
         provider.send([Message(role="user", content="hi")], [], timeout=5.0)
     assert calls["n"] == 1, (
         "a connect failure under a per-attempt deadline must make exactly ONE "
-        "attempt — the hidden second attempt doubles the per-turn budget"
+        "attempt — the hidden second attempt doubles the send's fallback budget"
     )
 
 

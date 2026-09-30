@@ -12,6 +12,65 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-30: the fallback budget restarts for each send
+
+KNOWN-BUGS 17. The routed path gave a turn one 120-second fallback budget, and its
+clock started when the turn started. A permission card, an arming code and a tool run
+all happen between two sends, so each of them was charged to the send after it. A
+card answered after 125 s let the tool run, left no budget for the next send, and
+failed the turn with "Addison couldn't reach a model to answer just now". The model
+was never asked again. `rpc/conversation.py` then removed the partial exchange, so
+the saved file had no trace in the transcript.
+
+The clock now starts at the top of each send's walk down the chain (`walk_started` in
+`_run_with_fallback`). Every candidate that one send tries still shares one budget,
+and each attempt is still handed what is left as its deadline. A send after a tool
+round now gets the provider's full default timeout. It used to get whatever the
+earlier rounds had left, which also shortened the deadline for a slow local model in
+a multi-step turn.
+
+The tests are in `tests/test_routing_fallback.py`, and each was turned red by a
+mutation in a scratch copy of the tree.
+
+- Moving the clock back to the start of the turn turns all three cases of
+  `test_time_between_two_sends_is_not_charged_to_the_next_send` red (permission card,
+  arming code, tool run), and `test_a_model_that_hangs_after_a_late_card_still_ends_the_turn`
+  with them.
+- Restarting the clock for each candidate turns
+  `test_one_sends_walk_shares_one_budget_across_every_candidate` red. Three hanging
+  candidates would otherwise get a budget each.
+- Passing no deadline to the send turns the hang test red, beside the older
+  `test_budget_deadline_bounds_a_blocking_candidate`.
+- Handing every attempt a whole budget as its deadline turns
+  `test_each_attempt_is_handed_what_is_left_of_the_budget` red. The review of this
+  change found that no test caught that mutation, because in every other walk test
+  the first candidate uses the whole budget.
+
+The live repro was run again over stdio against a fake OpenAI-compatible server. With
+the card answered after 125 s, the turn finished with the model's answer and two model
+requests. With a model that stops answering after the card, the turn ended 62 s later
+with the provider's own sentence.
+
+This change raises the longest time a turn can spend on models. Before it, the clock
+ran for the whole turn, so a turn stopped starting model requests about 120 s after it
+began. Now each send has its own 120 s for its walk down the chain. Each attempt's
+timeout is the smaller of what is left and the provider's default, which is 60 s for
+the cloud adapters and 120 s for Ollama. That timeout applies to each wait for data,
+so a model that keeps streaming text can run past it. A turn makes at most 25 sends
+(`_MAX_TOOL_ROUNDS`), and a send that keeps failing stops when its budget is spent or
+its chain runs out of candidates. Two consequences follow from the new bound. Stop
+does not end the job (KNOWN-BUGS 22 and 23), so after Stop a slow model can keep being
+asked for up to 25 sends. Model time alone can also pass the webview's
+`TURN_TIMEOUT_MS` of 900 s (`shell/src/ipc/client.ts`), for example with eight rounds
+of 120 s on a slow Ollama model. The webview then drops the reply when it arrives and
+lets the person send again while the core is still working.
+
+Two things are left as they were. A keychain prompt raised during a send still falls
+inside that send's budget, and the shell raises it at most once per provider per
+launch. A turn that fails after a tool has run still has its partial exchange removed
+by `rpc/conversation.py`, so the transcript does not show the action. KNOWN-BUGS 91
+records that.
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner
