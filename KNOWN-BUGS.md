@@ -119,6 +119,22 @@ others are struck.
     that PR merges and the check above has been re-run.
     `shell/src/App.tsx` (`normalizePermission`)
 
+94. **After a restore and one message, the next restore press brings back the
+    setup the person was escaping.** The one-action restore remembers where it
+    landed by comparing the running setup with that restore point. Every message
+    that goes to the main cloud model records whether its key is saved
+    (`_primary_key_status` → `Store.record_secret_presence`). A restore resets the
+    excluded `secret_presence` column to "unknown", so the first message after it
+    always updates the `provider_config` row, and that update also writes the
+    captured `updated_at`. When the row is missing, the message inserts a whole
+    captured row instead. Either way the running setup no longer matches the
+    restore point, the walk forgets its place, and the next press restores the
+    newest working setup, which can be the broken one. Reproduced by the review of
+    the fix for 16 with the real `Store` and the call a message makes. Added
+    2026-09-30, after the hunt.
+    `agent_core/memory/store.py` (`record_secret_presence`) ·
+    `agent_core/snapshots/snapshot_manager.py`
+
 ### P2 — trust and lifecycle
 
 22. **After Stop, a tool that already has permission still runs.** Live repro:
