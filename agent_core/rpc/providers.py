@@ -264,11 +264,9 @@ class ProvidersMixin(ServerContext):
             }
         )
         latency_by_provider = {row["provider"]: row["ms"] for row in latency}
-        stored = {c["provider_id"]: c for c in self.store.list_provider_configs()}
+        connected_ids = self.store.connected_provider_ids()
         for provider_id in PROVIDER_IDS:
-            cfg = stored.get(provider_id)
-            connected = cfg is not None and cfg["connected"]
-            if not connected:
+            if provider_id not in connected_ids:
                 continue
             ms = latency_by_provider.get(provider_id)
             label = provider_label(provider_id)
@@ -338,18 +336,21 @@ class ProvidersMixin(ServerContext):
         it is connected, and (when known) the added date, custom base URL, and the
         last connect-check result.
 
-        ``connected`` is the stored connection row, exactly, and NOTHING here reads
-        the OS keychain (plan §4.1). The old no-row fallback ("a key is already in the
-        keychain") was a keychain read on a display path; it survives as a *recorded*
-        answer instead — ``Store.record_secret_presence`` writes the row the first time
-        the per-turn read proves a key is there, which is what keeps a legacy/migrated
-        Anthropic key showing connected without a re-connect."""
+        ``connected`` is ``Store.connected_provider_ids``, and NOTHING here reads the
+        OS keychain (plan §4.1). The old no-row fallback ("a key is already in the
+        keychain") was a keychain read on a display path. It survives as a *recorded*
+        answer instead: the per-turn read writes what it found to
+        ``provider_observations``, and a provider with no row counts as connected when
+        that answer is a saved key. That keeps a legacy/migrated Anthropic key showing
+        connected without a re-connect, and it never writes a captured row
+        (KNOWN-BUGS 94)."""
         self._ensure_built()
         stored = {c["provider_id"]: c for c in self.store.list_provider_configs()}
+        connected_ids = self.store.connected_provider_ids()
         rows: list[dict] = []
         for provider_id in PROVIDER_IDS:
             cfg = stored.get(provider_id)
-            connected = cfg is not None and cfg["connected"]
+            connected = provider_id in connected_ids
             row: dict = {
                 "id": provider_id,
                 "label": provider_label(provider_id),

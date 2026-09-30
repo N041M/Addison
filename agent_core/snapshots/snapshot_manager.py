@@ -31,7 +31,11 @@ from pathlib import Path
 from typing import Any
 
 from agent_core.snapshots.model import ConfigSnapshot, RestoreResult
-from agent_core.snapshots.scope import _CAPTURED_TABLES
+from agent_core.snapshots.scope import (
+    _CAPTURED_TABLES,
+    _COLUMNS_JOINED_LATER,
+    _PAYLOAD_TABLE_SETS,
+)
 
 PAYLOAD_VERSION = 1
 
@@ -212,20 +216,83 @@ def _fingerprint(tables: dict) -> str:
     ).hexdigest()
 
 
+def _fingerprints(tables: dict) -> frozenset[str]:
+    """Every fingerprint a restore point holding the configuration in ``tables`` can
+    carry. ``tables`` is a full row image from ``read_config_state``.
+
+    An older build's restore point lacks the tables and columns that joined capture
+    after it, and its fingerprint was taken over what it has. It still holds this
+    configuration when restoring it would produce exactly this configuration. That
+    is true when each table it lacks is empty here, and when each column it lacks
+    holds, in every row here, the value a restore fills in for it
+    (``scope._COLUMNS_JOINED_LATER``). So every comparison between a saved
+    fingerprint and the configuration running now asks whether the saved one is in
+    this set.
+
+    One image is built for each table set a build wrote and each point in the column
+    history, and an image is only added when the conditions above hold. Dropping a
+    table that has rows, or a column whose value differs from what a restore fills
+    in, would describe a restore point that does not hold this configuration. The
+    walk would then treat that restore point as the setup already running, even
+    though restoring it would change something.
+
+    Comparing against ``_fingerprint(tables)`` alone made every older restore point
+    look different from the setup it would put back. After the walk landed on one,
+    it forgot where it had landed, and the next press restored the newest working
+    setup, which can be the broken one the person was escaping (KNOWN-BUGS 16 and
+    its review)."""
+    found = {_fingerprint(tables)}
+    for table_set in _PAYLOAD_TABLE_SETS:
+        if any(rows for table, rows in tables.items() if table not in table_set):
+            continue
+        kept = {table: rows for table, rows in tables.items() if table in table_set}
+        for joined in range(len(_COLUMNS_JOINED_LATER) + 1):
+            image = _without_columns(kept, _COLUMNS_JOINED_LATER[joined:])
+            if image is not None:
+                found.add(_fingerprint(image))
+    return frozenset(found)
+
+
+def _without_columns(tables: dict, columns: tuple) -> dict | None:
+    """``tables`` with each ``(table, column, fill)`` in ``columns`` taken out of every
+    row, or ``None`` when some row holds a value other than ``fill`` there. A restore
+    of a row without the column puts ``fill`` back, so only then does the image hold
+    the same configuration."""
+    image = dict(tables)
+    for table, column, fill in columns:
+        rows = image.get(table)
+        if not rows:
+            continue
+        if any(row.get(column) != fill for row in rows):
+            return None
+        image[table] = [{key: value for key, value in row.items() if key != column}
+                        for row in rows]
+    return image
+
+
 def _decode_payload(raw: str) -> dict | None:
-    """Strict decode: a payload is either fully usable or ``None``.
+    """Return the payload when all of it can be applied, and ``None`` otherwise.
 
-    Dropping a malformed row and applying the rest would hand the user a
-    configuration assembled by the recovery path that was never verified
-    working — the precise failure this floor exists to prevent. Strictness is
-    only affordable because the fallback is not "nothing": the restore walk is
-    unbounded, each candidate can fall back to its sidecar, and genesis is
-    permanent at the bottom.
+    The decoder never drops a malformed row and applies the rest. Doing that would
+    hand the person a configuration the recovery path assembled and nothing ever
+    ran, which is the failure this floor exists to prevent. Refusing a whole
+    payload is affordable because a refusal is never the end of the road. The
+    restore walk goes on to the next candidate, each candidate can fall back to
+    its sidecar copy, and the permanent row sits at the bottom.
 
-    Missing COLUMNS are tolerated on purpose (contract §6.3): a column added by
-    a future build must not invalidate every payload written before it, which
-    would silently evaporate a user's whole rollback history at upgrade time.
-    SQLite applies the declared default instead."""
+    Missing COLUMNS are tolerated on purpose (contract §6.3). A column added by a
+    later build must not make every payload written before it unreadable, because
+    that would wipe out a person's rollback history when they update. SQLite
+    applies the column's declared default instead.
+
+    Missing TABLES are tolerated for the same reason, but only in the shapes an
+    older build actually wrote. The payload's table set has to be one of
+    ``scope._PAYLOAD_TABLE_SETS``, and ``Store.apply_config_state`` empties a
+    captured table the payload does not carry. This decoder used to require every
+    captured table, so each table that joined capture made every restore point
+    saved before it unreadable, including the permanent first one (KNOWN-BUGS 16).
+    ``scope.py`` explains which shapes are refused and why, including a table this
+    build does not know."""
     try:
         payload = json.loads(raw)
     except Exception:
@@ -233,16 +300,24 @@ def _decode_payload(raw: str) -> dict | None:
     if not isinstance(payload, dict):
         return None
     version = payload.get("version")
-    # An OLDER payload is accepted (and upgraded by a future reader); a NEWER
-    # one is refused outright — an older build must never half-apply a newer
-    # build's payload.
+    # An older payload version is accepted. A newer one is refused, because an
+    # older build must never apply part of a newer build's payload.
     if not isinstance(version, int) or isinstance(version, bool) or version > PAYLOAD_VERSION:
         return None
     tables = payload.get("tables")
     if not isinstance(tables, dict):
         return None
+    present = frozenset(tables)
+    # The set this build writes is accepted even if a new table were ever added
+    # to _CAPTURED_TABLES without being recorded in the history. Refusing it would
+    # make every new restore point unreadable, which is worse than the defect the
+    # history exists to stop.
+    if present != frozenset(_CAPTURED_TABLES) and present not in _PAYLOAD_TABLE_SETS:
+        return None
     for table, columns in _CAPTURED_TABLES.items():
-        rows = tables.get(table)
+        if table not in tables:
+            continue
+        rows = tables[table]
         if not isinstance(rows, list):
             return None
         allowed = set(columns)
@@ -258,13 +333,13 @@ def _decode_payload(raw: str) -> dict | None:
 
 
 def select_payload_to_restore(
-    payloads: list[dict], *, current_fingerprint: str | None = None
+    payloads: list[dict], *, current_fingerprints: frozenset[str] | None = None
 ) -> tuple[dict | None, bool]:
     """Pick the payload a restore should apply, from sidecar payloads alone.
 
     Returns ``(payload, is_verified)``. Newest-first, preferring rows whose
-    ``meta.verified_working`` is truthy and whose ``meta.state_fingerprint``
-    differs from ``current_fingerprint``. Falls back to the newest usable
+    ``meta.verified_working`` is truthy and whose ``meta.state_fingerprint`` is
+    not in ``current_fingerprints`` (see ``_fingerprints``). Falls back to the newest usable
     UNVERIFIED payload only when no verified candidate exists — and the caller
     MUST tell the user when that happened, because "I rebuilt it from your last
     working setup" is then false.
@@ -298,9 +373,9 @@ def select_payload_to_restore(
         meta = meta if isinstance(meta, dict) else {}
         fingerprint = meta.get("state_fingerprint")
         if (
-            current_fingerprint is not None
+            current_fingerprints is not None
             and isinstance(fingerprint, str)
-            and fingerprint == current_fingerprint
+            and fingerprint in current_fingerprints
         ):
             # Applying this would change zero bytes, so it is never a
             # legitimate target however it is labelled.
@@ -313,7 +388,7 @@ def select_payload_to_restore(
 
 
 def _payloads_below(
-    payloads: list[dict], position: str | None, current_fingerprint: str | None
+    payloads: list[dict], position: str | None, current_fingerprints: frozenset[str] | None
 ) -> list[dict]:
     """Only the payloads strictly OLDER than the row the last restore landed on.
 
@@ -333,13 +408,13 @@ def _payloads_below(
     pruned or never written). Neither can be ordered against, and refusing to
     restore at all would strand a user whose database has already failed them.
     Recovery outranks tidiness of the walk."""
-    if not position or current_fingerprint is None:
+    if not position or current_fingerprints is None:
         return payloads
     for index, payload in enumerate(payloads):
         meta = payload.get("meta")
         if not isinstance(meta, dict) or meta.get("id") != position:
             continue
-        if meta.get("state_fingerprint") != current_fingerprint:
+        if meta.get("state_fingerprint") not in current_fingerprints:
             return payloads
         return payloads[index + 1 :]
     return payloads
@@ -776,10 +851,13 @@ class SnapshotManager:
         try:
             tables = self._store.read_config_state()
             fingerprint = _fingerprint(tables)
+            # An older build's restore point of this same configuration carries a
+            # different fingerprint, so both checks ask the whole set.
+            same = _fingerprints(tables)
             refs = self._store.verified_config_snapshot_refs()
-            if refs and refs[0].get("state_fingerprint") == fingerprint:
+            if refs and refs[0].get("state_fingerprint") in same:
                 return None
-            permanent = self._permanent_row_matching(fingerprint)
+            permanent = self._permanent_row_matching(same)
             if permanent is not None and not permanent["verified_working"]:
                 self._store.set_config_snapshot_verified(permanent["id"])
                 self._mirror_verified_into_sidecar(permanent["id"])
@@ -795,7 +873,7 @@ class SnapshotManager:
         except Exception:
             return None
 
-    def _permanent_row_matching(self, fingerprint: str) -> dict | None:
+    def _permanent_row_matching(self, fingerprints: frozenset[str]) -> dict | None:
         """A permanent row holding EXACTLY the configuration that just answered.
 
         The one case where flagging an existing row is honest rather than the
@@ -816,7 +894,7 @@ class SnapshotManager:
         pre-change snapshot buys nothing the fresh ``turn_verified`` row does not
         already provide, and would widen a rule that only needs to be narrow."""
         for row in self._store.list_config_snapshots():
-            if row.get("undeletable") and row.get("state_fingerprint") == fingerprint:
+            if row.get("undeletable") and row.get("state_fingerprint") in fingerprints:
                 return row
         return None
 
@@ -1051,18 +1129,18 @@ class SnapshotManager:
             # user looking for something they already have.
             return None, "unreadable", position
         try:
-            current_fingerprint = _fingerprint(self._store.read_config_state())
+            current_fingerprints = _fingerprints(self._store.read_config_state())
         except Exception:
             # A config we cannot even read cannot be compared, so nothing is
             # skipped and the newest decodable verified row wins. Failing open
             # here is right: the alternative is no restore at all.
-            current_fingerprint = None
-        start = self._walk_start(refs, current_fingerprint, position)
+            current_fingerprints = None
+        start = self._walk_start(refs, current_fingerprints, position)
         saw_identical = False
         saw_unreadable = False
         for ref in refs[start:]:
             fingerprint = ref.get("state_fingerprint")
-            if current_fingerprint is not None and fingerprint == current_fingerprint:
+            if current_fingerprints is not None and fingerprint in current_fingerprints:
                 saw_identical = True
                 continue
             payload = self._load_payload(ref.get("id"))
@@ -1104,7 +1182,7 @@ class SnapshotManager:
         return self._recorded_restore_target()
 
     def _walk_start(
-        self, refs: list[dict], current_fingerprint: str | None, marker: str | None
+        self, refs: list[dict], current_fingerprints: frozenset[str] | None, marker: str | None
     ) -> int:
         """Where the walk begins: strictly BELOW the row the last restore landed
         on, for exactly as long as the user is still sitting on it.
@@ -1128,20 +1206,20 @@ class SnapshotManager:
         A marker naming a row ``refs`` does not contain is not inert: it is an
         UNVERIFIED restore point the user picked out of the Settings list, and
         ``_start_below_the_full_list`` locates it among all the rows instead."""
-        if not marker or current_fingerprint is None:
+        if not marker or current_fingerprints is None:
             # No position, or no readable config to check it against. Start at
             # the top: recovery outranks tidiness of the walk.
             return 0
         for index, ref in enumerate(refs):
             if ref.get("id") != marker:
                 continue
-            if ref.get("state_fingerprint") == current_fingerprint:
+            if ref.get("state_fingerprint") in current_fingerprints:
                 return index + 1
             return 0
-        return self._start_below_the_full_list(refs, current_fingerprint, marker)
+        return self._start_below_the_full_list(refs, current_fingerprints, marker)
 
     def _start_below_the_full_list(
-        self, refs: list[dict], current_fingerprint: str, marker: str
+        self, refs: list[dict], current_fingerprints: frozenset[str], marker: str
     ) -> int:
         """Where the walk begins when the position names a row that is not in the
         verified list at all — the user restored an UNVERIFIED point by id from
@@ -1161,7 +1239,7 @@ class SnapshotManager:
             return 0            # unreadable, pruned, or from another database
         rows, at = located
         ids = [row.get("id") for row in rows]
-        if rows[at].get("state_fingerprint") != current_fingerprint:
+        if rows[at].get("state_fingerprint") not in current_fingerprints:
             return 0            # the user has moved on; the position expired
         older = set(ids[at + 1 :])
         for index, ref in enumerate(refs):
@@ -1345,14 +1423,14 @@ class SnapshotManager:
             return None
         remaining = recover_payloads_from_disk(self._snapshot_dir)
         try:
-            current_fingerprint = _fingerprint(self._store.read_config_state())
+            current_fingerprints = _fingerprints(self._store.read_config_state())
         except Exception:
-            current_fingerprint = None
-        remaining = _payloads_below(remaining, position, current_fingerprint)
+            current_fingerprints = None
+        remaining = _payloads_below(remaining, position, current_fingerprints)
         current = self._current_profile()
         while remaining:
             payload, is_verified = select_payload_to_restore(
-                remaining, current_fingerprint=current_fingerprint
+                remaining, current_fingerprints=current_fingerprints
             )
             if payload is None or (require_verified and not is_verified):
                 return None

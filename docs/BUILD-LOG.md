@@ -12,6 +12,120 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-30 (third): a turn never writes captured state
+
+KNOWN-BUGS 94, second half, and two owner decisions of 2026-09-30. The owner
+confirmed that a table a restore point lacks restores as empty (the rule from the fix
+for 16, which [`SAFETY.md`](SAFETY.md) owns). The owner also decided that presence for a
+provider with no `provider_config` row is kept outside captured state, while Settings
+and every presence read still consult it.
+
+**The missing row was wider than the entry first said.** The second review of 16
+found that no build before 2026-08-06 recorded a key read. A keyless install's
+restore points from 2026-07-20 to 2026-08-05 therefore have no Anthropic row, and
+every message after the update created one with `connected = 0`. With a message after
+every press, the walk went round the newer setups and never reached the oldest. The
+Settings argument recorded against dropping the row never applied to those installs,
+because the row a message created for them already said not connected.
+
+**What was built.** `provider_observations` holds the latest key read and key
+rejection for each provider, and `snapshots/scope.py` excludes it. Every live read
+writes it: the per-message read, the read `provider.connect` makes, and a rejection.
+The provider's row gets the same answer in its own excluded columns when it has one.
+A turn never creates a `provider_config` row. `Store.connected_provider_ids` is now the
+one definition of connected. A row answers for its provider, a provider with no row is
+connected when its observation records a key saved, and `custom` needs its row for the
+address. Settings, the connections panel, the models kept after a restore, the
+reconnect at launch and the check for a provider other than Anthropic all read it, so
+a restore that takes a row away never leaves the setup claiming fewer connections
+than exist (secrets plan §4.1). A database from before the table has it filled from
+`provider_config` when the table is created.
+
+**Two mutations the second review found surviving now fail.** The column tests had
+one row per table, so checking the default on the first row alone, or removing the
+column from the first row alone, passed. Both column tests now also run with two
+rows.
+
+**What remains.** Every routine run writes the captured `run_count` and
+`last_run_at`, so running a routine after a restore still ends the walk. That is
+KNOWN-BUGS 95.
+
+---
+
+## What shipped 09-30 (second): a key read no longer moves the restore walk, when the row exists
+
+KNOWN-BUGS 94. Recording what a key read proved (`record_secret_presence`) and
+recording or clearing a rejected key used to write the captured
+`provider_config.updated_at` beside the excluded column they exist for. A restore
+resets `secret_presence`, so the first message after every restore changed the
+captured setup, and the next press restored the newest working setup. Those three
+writes now touch only their own column. Nothing reads `provider_config.updated_at`.
+Creating a missing row to record presence was still captured state, and the third
+09-30 entry above closes it.
+
+---
+
+## What shipped 09-30: restore points from before an update can be restored again
+
+This fixes KNOWN-BUGS 16, and [`SAFETY.md`](SAFETY.md) ("What is captured") owns the
+rule that a table a payload lacks restores as empty. The owner confirmed that rule on
+2026-09-30. What belongs here is what the fix and its review found.
+
+**The decoder required every captured table, and a test asserted that it did.**
+`mcp_servers`, `automations` and `channels` joined capture after restore points
+shipped. Each join made every restore point saved before it unreadable, and that
+included the permanent first one and the rebuild from sidecar copies after the
+database file is damaged. `test_decode_is_strict_about_missing_tables_and_bad_row_types`
+deleted a table from a payload and expected a refusal, so the suite held the defect
+in place. It was replaced by `test_decode_still_refuses_a_damaged_payload`, which
+keeps every refusal that guards against damage.
+
+**Fixing the decoder alone left a walk that went forward.** The walk decides where it
+stands by comparing a restore point's saved fingerprint with the fingerprint of the
+running setup. An older restore point's fingerprint was taken over fewer tables, so it
+never matched. After the one-action restore landed on one, the walk forgot its place,
+and the next press restored the broken setup the person was escaping. The test for the
+entry's repro went red in exactly that way with only the decoder fixed.
+`_fingerprints` now returns every fingerprint a restore point of the running setup can
+carry, and all seven comparison sites use it. Each site has its own test, and each
+test goes red when its site alone is reverted.
+
+**The next table cannot do this again without a red test.** `scope.py` records the
+table set every build has written. The decoder accepts only those sets and refuses a
+table it does not know. `test_every_captured_table_is_recorded_in_the_history` fails
+when a table is added to `_CAPTURED_TABLES` without being recorded, and the
+restore test runs once for every recorded older set.
+
+**A trap in the repro harness.** The first repro saved old restore points through
+`Store` and `SnapshotManager` directly, skipping the old build's core. That database
+never had `widgets_seeded`, the one setting a restore preserves. Every restore then
+landed on a setup that differed from its restore point by that one key, and the walk
+restored the same row on every press. Booting the old build's own core first, as the
+app does, removed the effect. Real installs always have the key, because it is set
+before the first restore point is written.
+
+**The review found the same failure one level down, in columns.** The first version
+of `_fingerprints` handled tables only, and its docstring called a column that joined
+later a case where identical setups merely look different. That was wrong. A restore
+point saved before `routines.imported_at` (2026-08-15) holds routine rows with no such
+key, and a restore fills in NULL. After the walk landed on one, no fingerprint matched,
+and the next press restored the broken setup with the ordinary success sentence. The
+same holds for `channels.on_wake` (2026-08-22). Real databases from the builds before
+2026-08-15, opened over stdio, showed the walk restoring the same row on every press.
+`scope.py` now records `_COLUMNS_JOINED_LATER` with the default a restore fills in,
+`_fingerprints` builds an image for each point in that history, and
+`test_every_captured_column_is_recorded_in_the_history` fails when a captured column is
+not recorded.
+
+**The review also found conditions no test pinned.** Deleting the check that the tables
+an image leaves out are empty, checking it on the wrong tables, or building images for
+the newest older table set alone each left the suite green. The walk tests had only used
+7-table restore points. They now run for every older table set, and a new test covers a
+broken change confined to a table the restore point lacks. Each of the three mutations
+now fails a test.
+
+---
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner

@@ -42,21 +42,38 @@ others are struck.
 
 ### P1 — broken features
 
-16. **Restore points saved before an update cannot be restored after it,
-    including the permanent first restore point.** Save restore points with the
-    build from just before messaging channels (`git archive 3497faf^`), then open
-    the same database with the current build. Every row is still listed. The
-    one-action restore answers "Addison couldn't read the setups it saved for
-    you", and restoring any row by id answers "That restore point can't be
-    read". The cause is that `_decode_payload` rejects a payload with any captured
-    table missing, and three tables were added after restore points shipped
-    (`mcp_servers` on 08-06, `automations` on 08-07, `channels` on 08-22). Adding
-    `"channels": []` to an old payload makes it decode. Every install upgraded
-    across those dates has lost all of its rollback history, and the next captured
-    table will do it again. The docstring already tolerates missing columns for
-    this exact reason. `tests/test_snapshots.py` has a test that asserts the
-    strict behaviour. **Reproduced by the coordinator.**
-    `agent_core/snapshots/snapshot_manager.py` (`_decode_payload`) ·
+16. ~~**Restore points saved before an update cannot be restored after it,
+    including the permanent first restore point.**~~ **RE-RUN GREEN 2026-09-30**,
+    on branch `claude/fix-restore-old-snapshots`. The entry's own repro ran once for
+    each older table set. The builds from `git archive 475ed76^`, `12b70d5^` and
+    `3497faf^` each created a database through their own core and saved a first
+    restore point, two working setups and two others. Each database was then opened
+    through the real core over stdio. On master (`21ff450`) every press of the
+    one-action restore answered "Addison couldn't read the setups it saved for you",
+    and every row restored by id answered "That restore point can't be read". On the
+    branch the first press skipped the setup already running and landed on the older
+    working setup, the second landed on the first restore point, and the third
+    answered "You're back at the oldest setup Addison saved". All six rows restored
+    by id. With the `3497faf^` database file wrecked, master answered that there was
+    no saved restore point to rebuild from while six sat beside it, and the branch
+    rebuilt from them. Those presses had no message between them, because the stdio
+    harness has no model to answer one. The suite covers a message after every press
+    in `test_the_one_action_restore_walks_back_through_restore_points_from_before_an_update`
+    and, for a keyless install, in entry 94's tests. A payload that lacks a later
+    table now restores that table as empty. The owner confirmed that rule on
+    2026-09-30, and [`docs/SAFETY.md`](docs/SAFETY.md) ("What is captured") owns it.
+    The fix also had to make an older restore point's fingerprint comparable with
+    the running setup. Without that, the walk lost its place after landing on one
+    and the next press went forward into the broken setup. The review of the fix
+    found the same failure for a restore point holding a routine saved before
+    `routines.imported_at` joined (2026-08-15) or a phone connection saved before
+    `channels.on_wake` joined. After the walk landed on one, the next press restored
+    the broken setup. `scope.py` now records those columns and the default a restore
+    fills in. Databases from `475ed76^` and `12b70d5^` holding a routine were re-run
+    the same way. Before that change every press restored the same row again. With
+    it, the presses landed on the older working setup, then the first restore point,
+    then the bottom sentence.
+    `agent_core/snapshots/snapshot_manager.py` (`_decode_payload`, `_fingerprints`) ·
     `agent_core/snapshots/scope.py`
 
 17. **A turn fails if the person takes more than two minutes to answer a
@@ -119,21 +136,36 @@ others are struck.
     that PR merges and the check above has been re-run.
     `shell/src/App.tsx` (`normalizePermission`)
 
-94. **After a restore and one message, the next restore press brings back the
-    setup the person was escaping.** The one-action restore remembers where it
-    landed by comparing the running setup with that restore point. Every message
-    that goes to the main cloud model records whether its key is saved
-    (`_primary_key_status` → `Store.record_secret_presence`). A restore resets the
-    excluded `secret_presence` column to "unknown", so the first message after it
-    always updates the `provider_config` row, and that update also writes the
-    captured `updated_at`. When the row is missing, the message inserts a whole
-    captured row instead. Either way the running setup no longer matches the
-    restore point, the walk forgets its place, and the next press restores the
-    newest working setup, which can be the broken one. Reproduced by the review of
-    the fix for 16 with the real `Store` and the call a message makes. Added
-    2026-09-30, after the hunt.
-    `agent_core/memory/store.py` (`record_secret_presence`) ·
-    `agent_core/snapshots/snapshot_manager.py`
+94. ~~**After a restore and one message, the next restore press brings back the
+    setup the person was escaping.**~~ **RE-RUN GREEN 2026-09-30**, on branch
+    `claude/fix-restore-old-snapshots`. The one-action restore remembers where it
+    landed by comparing the running setup with that restore point, and every message
+    to the main cloud model recorded its key read in captured state. When the
+    Anthropic `provider_config` row existed, the message wrote the captured
+    `updated_at` beside the excluded `secret_presence`. When the row was missing, the
+    message created it. The missing-row case was wider than first written. No build
+    before 2026-08-06 recorded a key read, so a keyless install's restore points from
+    2026-07-20 to 2026-08-05 have no Anthropic row, the permanent first one included,
+    and those are the points the fix for 16 made readable again. After the walk
+    landed on one, the next message created the row again, and with a message after
+    every press the walk went round the newer setups without reaching the oldest. A
+    new install's first restore point has no row either.
+    The owner decided on 2026-09-30 that a turn never writes captured state. Key
+    reads and key rejections now go to `provider_observations`, which no restore
+    point captures, and to the excluded columns of the provider's row when it has
+    one. A provider with no row counts as connected when its latest key read found a
+    key saved, so Settings still shows a key saved without a row as connected.
+    The re-run: the review's repro (`test_r4_presence_drift.py`) and the missing-row
+    repro both pass on the branch. The keyless walk with a message after every press
+    landed on A and B, then A, then the first restore point, and then answered that
+    there was nothing further back. On the pushed head `e4b0fa9` the same test landed
+    on A and B, then A, B and Broken, then A and B. Databases from `3497faf^` and
+    from `e4b0fa9`, each holding a connected Anthropic row, were opened over stdio.
+    Both builds before this change showed Anthropic as not connected after the walk
+    reached the first restore point. The branch created `provider_observations`,
+    filled it from the row, and kept Anthropic connected through every press.
+    `agent_core/memory/store.py` (`record_secret_presence`, `record_key_rejected`,
+    `connected_provider_ids`) · `agent_core/memory/schema.sql` (`provider_observations`)
 
 95. **Running a routine after a restore sends the next restore press forward.**
     A routine run writes `run_count` and `last_run_at` (`touch_routine_run_stats`),

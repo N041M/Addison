@@ -244,18 +244,24 @@ def test_repeated_rejections_never_re_notify(tmp_path):
 
 def test_a_provider_with_no_row_at_all_is_still_recorded(tmp_path):
     """Something reached that provider with a key and was refused, which is worth
-    recording even where no connect ever completed. The row it creates must not
-    claim a connection, and must not claim 'no key saved' either."""
+    recording even where no connect ever completed. It is recorded in
+    ``provider_observations`` and creates no ``provider_config`` row, because a turn
+    must never change captured state (KNOWN-BUGS 94, owner decision 2026-09-30). The
+    record must not claim a connection, and must not claim 'no key saved' either.
+
+    Mutation: let ``record_key_rejected`` insert a ``provider_config`` row again and
+    the first assertion fails."""
     store = Store(tmp_path / "p.sqlite3")
     try:
-        assert store.record_key_rejected("openai") is True
-        cfg = store.get_provider_config("openai")
-        assert cfg is not None
-        assert cfg["connected"] is False
-        assert cfg["secret_presence"] is SecretPresence.UNKNOWN, (
-            "a rejection wrote 'absent' into a fresh row — the relay reads this"
+        assert store.record_key_rejected("openai", at=1_700_000_000) is True
+        assert store.get_provider_config("openai") is None
+        assert store.key_rejected_at("openai") == 1_700_000_000
+        assert "openai" not in store.connected_provider_ids()
+        assert store.secret_presence("openai") is SecretPresence.UNKNOWN, (
+            "a rejection recorded 'absent' — the relay reads this"
         )
-        assert may_reach_setup_relay(cfg["secret_presence"]) is False
+        assert may_reach_setup_relay(store.secret_presence("openai")) is False
+        assert store.record_key_rejected("openai") is False, "told twice"
     finally:
         store.close()
 

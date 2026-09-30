@@ -145,7 +145,7 @@ def _auto_title(text: str) -> str | None:
 
 class ConversationMixin(ServerContext):
     def _other_cloud_provider_connected(self) -> bool:
-        """Is any NON-Anthropic cloud provider marked connected in provider_config?
+        """Is any NON-Anthropic cloud provider connected (``Store.connected_provider_ids``)?
 
         Standing evidence that the person has a PRIMARY-capable setup even with no
         Anthropic key — the §4.6 relay handoff is for having no key at all, so this
@@ -154,8 +154,8 @@ class ConversationMixin(ServerContext):
         its own, it only prevents a wrongful detour to onboarding."""
         try:
             return any(
-                cfg["provider_id"] != "anthropic" and cfg["connected"]
-                for cfg in self.store.list_provider_configs()
+                provider_id != "anthropic"
+                for provider_id in self.store.connected_provider_ids()
             )
         except Exception:
             return False

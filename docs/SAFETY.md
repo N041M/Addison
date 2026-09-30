@@ -291,6 +291,52 @@ and rebuilds in the same session.
   Because restore is replace-all, an uncaptured new column would be silently reset
   to its default **by the recovery path**. Add a Phase-2 table or column, and you
   decide there, in code.
+
+  **A restore point saved before a table joined capture restores that table as
+  empty.** The owner confirmed this rule on 2026-09-30. Three tables joined after
+  restore points shipped on 2026-07-20: `mcp_servers` on 2026-08-06, `automations`
+  on 2026-08-07 and `channels` on 2026-08-22. A payload saved before one of them has
+  no entry for it. Until 2026-09-30 the decoder refused such a payload (KNOWN-BUGS
+  16), so every install updated across those dates had lost all of its restore
+  points, including the permanent first one. The table did not exist when the
+  restore point was saved, so the restore point records it as having no rows.
+  Restoring any newer restore point saved before the first tool server, automation
+  or phone connection was added already did exactly that, so the rule produces no
+  state a restore could not produce before. What emptying each table does:
+
+  - `mcp_servers`: the servers are removed, and `_finish_restore` drops the tools
+    they had registered.
+  - `automations`: the saved rows are removed. A job the OS already runs stays
+    armed, because a restore neither arms nor disarms anything. The Automations
+    section in Settings lists an armed job that has no row as "Running, but not
+    saved here" with a Switch off button, in every profile. That is the
+    reconcile-on-restore design of 2026-08-08 for a restore to a point from before
+    an automation was written.
+  - `channels`: the rows are removed, and their `channel_pairings` rows go with
+    them through the foreign key, as they do on every restore. `_finish_restore`
+    stops every poll loop. The channel's token stays in the keychain, as every key
+    does.
+
+  Leaving a missing table untouched was the alternative, and it was rejected. The
+  restored setup would then differ from the one the restore point recorded, and
+  the walk could no longer tell that it had landed there. `scope.py` records every
+  table set a build has written, and the decoder refuses any other shape, including
+  a payload that holds a table this build does not know. `scope.py` also records the
+  columns that joined a captured table later and the default a restore fills in for
+  each, so the walk recognises a restore point saved before one of them.
+
+  **A turn never writes captured state** (KNOWN-BUGS 94). On 2026-09-30 the owner
+  chose to keep what a key read proves for a provider with no row outside captured
+  state, and this rule is how the code carries that choice out. The walk holds its place only while the setup matches the restore point it landed
+  on, so an automatic write during a turn sends the next press back to the newest
+  working setup, which can be the broken one. What a key read or a rejected key
+  proves goes to `provider_observations`, which no restore point captures, and to
+  the excluded columns of the provider's row when it has one. A turn no longer
+  creates a `provider_config` row. A provider with no row counts as connected when
+  its latest key read found a key saved (`Store.connected_provider_ids`), so a
+  restore that takes a row away never leaves the setup claiming fewer connections
+  than exist. Running a routine still writes the captured `run_count` and
+  `last_run_at`, and KNOWN-BUGS 95 tracks it.
 - **Never captured:** the keychain (G1), the transcript, `usage_log`,
   `action_snapshots`, `routine_runs`, `device_identity`, `config_snapshots`
   itself, **`tool_grants`**, and (step 5) **`workspace_trust`**: live consent

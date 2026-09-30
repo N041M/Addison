@@ -159,6 +159,11 @@ erDiagram
         INTEGER key_rejected_at "NULL = not rejected"
         INTEGER updated_at
     }
+    provider_observations {
+        TEXT provider_id PK "4 known ids"
+        TEXT secret_presence "present|absent|unknown"
+        INTEGER key_rejected_at "NULL = not rejected"
+    }
     skills {
         TEXT id PK
         TEXT name
@@ -332,6 +337,19 @@ erDiagram
   its `free` flag come from the code catalog (`agent_core/models_catalog.py`), and the
   per-provider **cooldown** is in-memory in the orchestrator (a module constant, not a
   column), so nothing persisted can shrink or extend it.
+- **provider_observations** (2026-09-30, KNOWN-BUGS 94): the latest answer a live key
+  read and the latest key rejection gave for each provider, in a table snapshots never
+  capture. Every live read writes it, from the per-message read and from
+  `provider.connect`, and so does every rejection. A provider's row gets the same
+  answer in its own excluded columns, and readers use the row first. A turn used to
+  create a `provider_config` row when there was none, which changed captured state and
+  broke the restore walk, and the owner decided on 2026-09-30 that it never does. A
+  provider with no row is connected when its observation records a key saved
+  (`Store.connected_provider_ids`), except `custom`, whose address only its row holds.
+  That is what keeps a key saved without a row showing as connected, including after a
+  restore takes the row away. `provider.disconnect` deletes the observation with the
+  row. A database from before this table has it filled once from `provider_config`
+  when the table is created.
 - **app_settings**: a generic non-secret key/value store. The keys actually written
   today are `active_profile` (one of `simple`, `developer`, or **`custom`**; default
   `simple`; amendment §7 adds Custom, a user-tuned surface reached deep in Settings),
@@ -448,7 +466,10 @@ erDiagram
   - `created_in_mode` is **recorded for display only and never filters a query**; see the
     note below.
   - **The payload shape**, written byte-identically into `state_blob` and into the JSON
-    sidecar: `{"version", "captured_at", "captured_at_ns", "meta", "tables"}`. A *restore*
+    sidecar: `{"version", "captured_at", "captured_at_ns", "meta", "tables"}`. A payload
+    saved before a table joined capture has no entry for that table in `tables`, and a
+    restore empties that table. The owner confirmed that rule on 2026-09-30, and
+    [SAFETY.md](SAFETY.md) ("What is captured") owns it. A *restore*
     reads only `version` and `tables`; `meta` is the row's **only backup**: it carries every
     column not derivable from `tables` (identity, provenance, the fingerprint, and the three
     flags plus `binary_ref`), because a rebuild from sidecars alone would otherwise quietly

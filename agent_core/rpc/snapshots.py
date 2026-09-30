@@ -243,8 +243,14 @@ class SnapshotsMixin(ServerContext):
 
     def _resync_providers(self) -> None:
         """Forget the router models of providers the restored config dropped, and
-        re-arm the reconnect latch for the ones it kept."""
+        re-arm the reconnect latch for the ones it kept.
+
+        A provider the restored config has no row for is kept when it still counts
+        as connected, because its key is recorded as saved (KNOWN-BUGS 94). Dropping
+        its models would make the restored setup claim fewer connections than exist,
+        which the secrets plan §4.1 calls the worse lie."""
         known = {cfg["provider_id"] for cfg in self.store.list_provider_configs()}
+        known |= self.store.connected_provider_ids()
         for model in [m for m in self._cloud_catalog if m.provider not in known]:
             self.model_router.unregister_primary_model(model.id)
         self._cloud_catalog = [m for m in self._cloud_catalog if m.provider in known]

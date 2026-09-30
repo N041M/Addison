@@ -1,6 +1,10 @@
 """What a G3 snapshot captures — the declared table set and the declared column
 set (amendment §3, spec §4.9).
 
+It also records which tables and columns joined capture after restore points
+shipped, because a payload saved before one joined has no entry for it
+(``_PAYLOAD_TABLE_SETS`` and ``_COLUMNS_JOINED_LATER``).
+
 A leaf module on purpose: it imports nothing but ``__future__``, so both
 ``memory/store.py`` (which builds and applies the row image) and
 ``snapshot_manager.py`` (which validates a decoded payload against it) can depend
@@ -64,6 +68,68 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
     "channels":        ("id", "kind", "name", "enabled", "on_wake", "created_at"),
 }
 
+# WHICH TABLES A PAYLOAD MAY LACK (KNOWN-BUGS 16, fixed 2026-09-30).
+#
+# Restore points shipped on 2026-07-20 capturing the five tables in
+# _FIRST_CAPTURED_TABLES. Three more joined capture later, and a payload saved before
+# a table joined has no entry for it. The decoder used to require every table in
+# _CAPTURED_TABLES, so each table that joined made every older restore point
+# unreadable, including the permanent first one.
+#
+# A payload that lacks a later table restores that table as empty
+# (Store.apply_config_state). The owner confirmed that rule on 2026-09-30.
+# docs/SAFETY.md ("What is captured") owns it, including what it does to each of the
+# three tables.
+#
+# The decoder accepts a payload only when its tables are exactly one of the sets a
+# build has written (_PAYLOAD_TABLE_SETS). It refuses a payload that lacks one of the
+# first five, one that lacks a later table while holding a table that joined after
+# it, and one that holds a table this build does not know. Damage is the only thing
+# that produces the first two. The third can only come from a newer build or from
+# damage. The decoder before 2026-09-30 ignored such a table and applied the rest.
+# Refusing it is a deliberate change, made because applying the known tables would
+# put back part of a newer build's setup. It matches the refusal of a column this
+# build does not know, which the decoder has always made. PAYLOAD_VERSION has been 1
+# since restore points shipped, so the version check does not catch this case.
+#
+# To add a captured table, add it to _CAPTURED_TABLES and append it to
+# _JOINED_CAPTURE_LATER in the same change. tests/test_snapshots.py fails until the
+# two agree, and it restores a payload of every older shape.
+_FIRST_CAPTURED_TABLES: tuple[str, ...] = (
+    "app_settings", "provider_config", "skills", "widgets", "routines",
+)
+_JOINED_CAPTURE_LATER: tuple[str, ...] = (
+    "mcp_servers",    # 2026-08-06, step 7 phase 1
+    "automations",    # 2026-08-07, step 8 phase 1
+    "channels",       # 2026-08-22, messaging channels phase 1
+)
+
+# Every table set a build has written into a payload, oldest first. The last is the
+# set this build writes.
+_PAYLOAD_TABLE_SETS: tuple[frozenset[str], ...] = tuple(
+    frozenset(_FIRST_CAPTURED_TABLES + _JOINED_CAPTURE_LATER[:joined])
+    for joined in range(len(_JOINED_CAPTURE_LATER) + 1)
+)
+
+# COLUMNS THAT JOINED A CAPTURED TABLE LATER, oldest first. Each entry is the table,
+# the column, and the value a restore fills in when an older payload's row has no
+# such key. That value is the column's schema default, because the restore inserts
+# the row without the column and SQLite supplies the default.
+#
+# snapshot_manager._fingerprints needs this record. A restore point saved before a
+# column joined was fingerprinted without it. After the walk lands on that restore
+# point, the setup read back has the column in every row, so without this record the
+# two never match, the walk forgets where it landed, and the next press restores the
+# newest working setup, which can be the broken one (the review of KNOWN-BUGS 16).
+#
+# To capture a new column of a table that is already captured, add it to
+# _CAPTURED_TABLES and append it here in the same change. tests/test_snapshots.py
+# fails until the two agree.
+_COLUMNS_JOINED_LATER: tuple[tuple[str, str, int | str | None], ...] = (
+    ("routines", "imported_at", None),     # 2026-08-15, routine sharing
+    ("channels", "on_wake", "decline"),    # 2026-08-22, messaging channels phase 3
+)
+
 # Deliberately NOT captured, each for a stated reason. A restore leaves all of
 # these byte-identical.
 _EXCLUDED_TABLES: dict[str, str] = {
@@ -98,6 +164,14 @@ _EXCLUDED_TABLES: dict[str, str] = {
     # evidence somebody is rolling back BECAUSE of. The likeliest reason to restore
     # after a provider goes wrong is the provider going wrong.
     "provider_attempts": "failure history; a restore must never rewrite what happened",
+    # KNOWN-BUGS 94. On 2026-09-30 the owner chose to keep key answers for a provider
+    # with no row outside captured state, for the same reason as `secret_presence`.
+    # A live key read and a key rejection are observations, and a turn writes them.
+    # Kept here, a turn never changes captured state, so the restore walk still
+    # recognises the restore point it landed on. A restore leaves them alone, so a
+    # key that is still saved keeps its provider showing as connected after a
+    # restore takes the provider's row away.
+    "provider_observations": "what a key read or a rejected key proved, written by turns",
     # Step 6 half A, on the `memory_facts` precedent. `widgets` IS captured — the
     # spec is configuration — but what the person has since DONE with one (a ticked
     # box, an edited note, a paused timer) is their content, not their setup.
