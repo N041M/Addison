@@ -754,6 +754,20 @@ others are struck.
 - Bidirectional override characters are not stripped from `run_command` details or
   automation commands. No single-line command was found that hides a destructive
   part without visible noise.
+- Some current OpenAI models may refuse every message from Addison. OpenAI's
+  reasoning guide says Chat Completions does not support function calling for
+  some of its newest models, and Microsoft's Azure reasoning guide says the
+  gpt-5.6 models refuse a Chat Completions request that includes `tools` unless
+  `reasoning_effort` is `none`. The OpenAI adapter sends `tools` on every
+  request, and `catalog_from_live_ids` ranks an unknown newer id ahead of gpt-5.
+  A refusal does not fall forward, so a turn that reaches such a model fails.
+  Found by the review of the fix for 19 with guessed model ids. Added 2026-09-30.
+- An Azure OpenAI reasoning deployment added as a custom server would fail every
+  message the way 19 did. Azure's reasoning models accept only
+  `max_completion_tokens` on Chat Completions, and a custom server is sent
+  `max_tokens`. Whether Azure's endpoint accepts the key the way the custom slot
+  sends it was not checked. Found by the review of the fix for 19. Added
+  2026-09-30.
 
 ## Whole-app test pass, 8–9 August 2026
 
