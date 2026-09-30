@@ -323,6 +323,8 @@ describe("normalizeProfile", () => {
 // ---------------------------------------------------------------------------
 describe("normalizeRoles", () => {
   it("round-trips the realistic string-array roles from available_roles", () => {
+    // `localModels` sits beside `roles` on the wire and belongs to the local role.
+    // This test once expected it to be dropped (KNOWN-BUGS 20).
     const wire = {
       roles: ["primary", "local"],
       localModels: ["llama3.1"],
@@ -330,7 +332,22 @@ describe("normalizeRoles", () => {
     };
     expect(normalizeRoles(wire)).toEqual([
       { role: "primary", label: "Cloud", configured: true },
+      {
+        role: "local",
+        label: "On this computer",
+        configured: true,
+        models: [{ id: "llama3.1", label: "llama3.1" }],
+      },
+    ]);
+  });
+
+  it("gives the local role no models key when the core sends no localModels", () => {
+    expect(normalizeRoles({ roles: ["local"] })).toEqual([
       { role: "local", label: "On this computer", configured: true },
+    ]);
+    // Junk entries in the list are skipped rather than shown.
+    expect(normalizeRoles({ roles: ["local"], localModels: ["m1", 7, null, { nope: 1 }] })).toEqual([
+      { role: "local", label: "On this computer", configured: true, models: [{ id: "m1", label: "m1" }] },
     ]);
   });
 

@@ -297,11 +297,66 @@ def _activity_notification(server: JsonRpcServer) -> dict:
     return captured[0]["params"]
 
 
-def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
+# The model the local-setup fixtures set up. It is the first curated choice in
+# shell/src/components/LocalModelSetup.tsx, so the frontend test can press that
+# row's real button and then feed it these frames.
+_LOCAL_SETUP_MODEL = "llama3.2:3b"
+
+# Four lines of an Ollama /api/pull stream. Only the two lines that carry byte
+# counts produce a progress frame.
+_LOCAL_SETUP_PULL_BODY = (
+    b'{"status":"pulling manifest"}\n'
+    b'{"status":"downloading","total":200,"completed":90}\n'
+    b'{"status":"downloading","total":200,"completed":200}\n'
+    b'{"status":"success"}\n'
+)
+
+
+def _local_setup_frames(tmp_dir: Path, *, check_status: int) -> list[dict]:
+    """Every ``model.localSetupProgress`` frame one setup emits, in order.
+
+    Driven through ``_run_local_setup``, which is the thread ``model.startLocalSetup``
+    starts once its checks pass. It runs here on the calling thread so the order of
+    the frames is fixed. Ollama is an ``httpx.MockTransport``. ``check_status`` is
+    what Ollama answers to the one test message sent after the download: 200 gives
+    a setup that finishes, and 500 gives a download that completed followed by a
+    check that failed.
+
+    A server of its own, because a finished setup registers the model with the
+    router, and the shared fixture server's ``model.availableRoles`` must not change
+    with it."""
+
+    def ollama(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/pull":
+            return httpx.Response(200, content=_LOCAL_SETUP_PULL_BODY)
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": ["tools"]})
+        if request.url.path == "/api/chat":
+            return httpx.Response(check_status, json={"message": {"content": "Hello."}})
+        return httpx.Response(404, json={"error": "no route"})
+
+    server = JsonRpcServer(
+        reader=None,
+        writer=None,
+        tool_registry=ToolRegistry(),
+        store_factory=lambda: Store(tmp_dir / "local-setup.sqlite3"),
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: _StubProvider()}),
+        ollama_base_url="http://127.0.0.1:11434",
+        ollama_client=httpx.Client(transport=httpx.MockTransport(ollama)),
+    )
+    captured: list[dict] = []
+    server._write_frame = captured.append  # type: ignore[method-assign]
+    server._run_local_setup(_LOCAL_SETUP_MODEL)
+    return [frame["params"] for frame in captured]
+
+
+def generate_fixtures(tmp_dir: Path) -> dict[str, dict | list]:
     """Method name -> the exact payload the core puts on the wire for it today.
 
-    Mostly request results, read straight off their handlers; ``tool.activityUpdate``
+    Mostly request results, read straight off their handlers. ``tool.activityUpdate``
     is a Core -> Frontend notification and carries its ``params`` instead.
+    ``model.localSetupProgress`` is a list of params, because what the frontend has
+    to follow is the whole sequence one setup sends.
     """
     router = ModelRouter(configured={ModelRole.PRIMARY: _StubProvider()})
     router.register_local_model("llama3.2:3b", _StubProvider())
@@ -352,6 +407,10 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "costPlan.propose": server._cost_plan_propose(),
         "endpoint.proposeFromConversation": server._endpoint_propose(),
         "tool.activityUpdate": _activity_notification(server),
+        # One setup that finishes and one whose check fails. The window used to
+        # look for `done` and `error` keys these frames never carry (KNOWN-BUGS 20).
+        "model.localSetupProgress": _local_setup_frames(tmp_dir, check_status=200),
+        "model.localSetupProgress.error": _local_setup_frames(tmp_dir, check_status=500),
     }
 
 

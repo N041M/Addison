@@ -12,6 +12,68 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-30: "Run a model on this computer" follows the setup to its end (KNOWN-BUGS 20)
+
+`model.startLocalSetup` answers `{ok, started}` as soon as the download begins,
+and the rest of the setup arrives as `model.localSetupProgress` frames. The core
+already ended every started setup with exactly one frame whose `stage` is "done"
+or "error", with the plain sentence in `message`. The window read the answer as
+the end of the setup, and it looked for `done` and `error` keys that no frame
+carries. So it said the model was ready at once, then went back to "setting up…"
+on the next frame and stayed there. A failed setup was never shown, and every Set
+up button stayed disabled.
+
+- The answer to `startLocalSetup` now only keeps the row running. A rejected call
+  is how a refusal before the download shows (Ollama not running, too little
+  room).
+- The frames are folded in `useModelSelection` (`foldLocalSetupProgress`,
+  `handleLocalSetupProgress`), and App's subscriber hands each frame to it. A
+  "done" frame re-reads the model list. An "error" frame shows the core's sentence
+  and frees the Set up buttons.
+- A second cause sat under "the model does not appear in the picker".
+  `model.availableRoles` sends the roles as bare strings and the local models
+  beside them as `localModels`, and `normalizeRoles` never attached that list to
+  the local role. A finished setup never reached the picker, the Tools page or the
+  setup rows while the app was running. Two parser tests had pinned the dropped
+  list as correct, and they now expect it. The model is still forgotten when the
+  app restarts, because the core registers it only at the end of
+  `_run_local_setup`. That is KNOWN-BUGS 93 and is not fixed here.
+- The note "Ready to use. Pick “On this computer” beside the message box" was
+  hidden for any model already in the list. Once the list was re-read correctly
+  that hid it at once, so it now shows for the setup that just finished.
+
+The review of that first fix found two more ways for the row to lose track of a
+setup, and both are fixed in the same change.
+
+- The frames did not say which model they were about, and the window put every
+  frame on whatever row was on screen. `model.startLocalSetup` runs on the core's
+  worker, so it queues behind a turn, and the client gave up on it after 120 s.
+  In the reviewer's case, Light and quick's call timed out, Balanced was then
+  refused as busy, and Light and quick's frames marked Balanced ready. The core
+  now names the model on every frame (`modelName`, documented in `protocol.py`
+  and `protocol.ts`). A frame changes only the setup for the model it names. It
+  takes over when no setup is on screen or the one on screen has ended, which
+  also covers a window reloaded during a download. A refusal lands only on the
+  setup its own call started while that setup is still waiting. The start call
+  now uses the turn timeout of 900 s.
+- A setup runs on a thread inside the engine, so an engine restart during a
+  download ended it with no final frame, and every Set up button stayed disabled
+  for good. App's core-state subscriber now hands the engine state to the hook,
+  and any state other than "ready" ends a running setup with "Setting up stopped
+  because Addison's engine stopped. Press Set up to try again."
+
+How it was checked. `tests/ipc_fixtures.py` captures the frames of one finished
+and one failed setup from `_run_local_setup`. `localModelSetup.test.tsx` drives
+the hook and the real App's Settings rows with them, including the reviewer's case
+and an engine restart, and `localSetupTimeout.test.ts` drives the real IPC client
+with a faked clock. `test_local_setup.py` pins the core's half, which is one final
+frame, last, with the sentence in `message` and the model named on every frame.
+Every new test went red under the mutation named beside it. The desktop app was
+not launched and no real Ollama was used, so the row has not been seen in the real
+webview.
+
+---
+
 ## What shipped 08-23: Windows port phase 1, and the two floors that only existed on the platform they were written for
 
 [`windows-port-plan.md`](plans/windows-port-plan.md) owns the subject, the three owner

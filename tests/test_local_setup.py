@@ -27,6 +27,7 @@ import time
 from typing import Callable
 
 import httpx
+import pytest
 
 from agent_core import main as main_module
 from agent_core.main import JsonRpcServer
@@ -342,6 +343,95 @@ def test_start_local_setup_preflight_does_not_stall_frame_delivery(tmp_path, mon
         assert not any(f.get("id") == 1 and ("result" in f or "error" in f) for f in writer.frames)
     finally:
         release.set()
+        _shutdown(reader, thread)
+
+
+# --- how a started setup ends (KNOWN-BUGS 20) --------------------------------
+@pytest.mark.parametrize(
+    ("chat_status", "last_frame"),
+    [
+        (
+            200,
+            {
+                "modelName": "llama3:8b",
+                "stage": "done",
+                "message": "llama3:8b is ready to use.",
+                "percent": 100,
+            },
+        ),
+        (
+            500,
+            {
+                "modelName": "llama3:8b",
+                "stage": "error",
+                "message": "The local model had a problem. Please try again in a moment.",
+            },
+        ),
+    ],
+    ids=["finished", "check-failed"],
+)
+def test_a_started_setup_ends_in_exactly_one_final_frame(
+    tmp_path, monkeypatch, chat_status, last_frame
+):
+    """The core's half of the contract the window now follows.
+
+    ``{ok, started}`` means the download started, and the window waits for a
+    ``model.localSetupProgress`` frame whose ``stage`` is "done" or "error"
+    (``foldLocalSetupProgress`` in useModelSelection.ts). So every started setup has
+    to end in exactly one such frame, with nothing after it, and a failure has to
+    carry its plain sentence in ``message``. The window read ``done`` and ``error``
+    KEYS until 2026-09-30, which is how a setup came to say "setting up…" for ever.
+
+    Every frame also names its model, because the window puts a frame only on the
+    row for the model it names. Without the name, the frames of one setup marked a
+    different row ready after a start request timed out.
+
+    Mutations: emit the failure as ``stage: "failed"`` in ``_run_local_setup`` and
+    the check-failed case never sees an "error" frame. Put the sentence under an
+    ``error`` key and the frame no longer matches. Drop ``modelName`` from
+    ``_emit_local_progress`` and both cases fail."""
+    _plenty_of_hardware(monkeypatch)
+    client = _ollama_client(
+        {
+            "/api/tags": (200, {"models": []}),
+            "/api/pull": lambda r: httpx.Response(
+                200,
+                content=(
+                    b'{"status":"downloading","total":10,"completed":5}\n'
+                    b'{"status":"success"}\n'
+                ),
+            ),
+            "/api/show": (200, {"capabilities": ["tools"]}),
+            "/api/chat": (chat_status, {"message": {"content": "Hello."}}),
+        }
+    )
+    server, reader, writer, thread = _server(tmp_path, ollama_client=client)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.MODEL_START_LOCAL_SETUP,
+             "params": {"modelName": "llama3:8b"}}
+        )
+        ack = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        assert ack["result"] == {"ok": True, "started": True}
+        writer.wait_for(
+            lambda f: f.get("method") == Method.MODEL_LOCAL_SETUP_PROGRESS
+            and f["params"].get("stage") == last_frame["stage"]
+        )
+        for worker in [t for t in threading.enumerate() if t.name == "local-setup"]:
+            worker.join(timeout=5)
+
+        stages = [
+            f["params"] for f in writer.frames if f.get("method") == Method.MODEL_LOCAL_SETUP_PROGRESS
+        ]
+        finals = [p for p in stages if p["stage"] in ("done", "error")]
+        assert finals == [last_frame]
+        assert stages[-1] == last_frame
+        # Everything before the end is a running stage the window shows as running.
+        assert {p["stage"] for p in stages[:-1]} <= {"downloading", "verifying"}
+        assert all(p.get("modelName") == "llama3:8b" for p in stages)
+        # The next setup may start: the busy flag went down with the last frame.
+        assert server._local_setup_active is False
+    finally:
         _shutdown(reader, thread)
 
 

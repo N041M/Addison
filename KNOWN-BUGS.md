@@ -94,18 +94,40 @@ others are struck.
     are unaffected.
     `agent_core/providers/openai_provider.py` (`send`)
 
-20. **"Run a model on this computer" never finishes on screen.** The window shows
-    the model as ready the moment the download starts, then shows "setting up…"
-    for ever. A failed download is never shown as an error, every Set up button
-    stays disabled, and the finished model does not appear in the picker until
-    the app restarts. `model.startLocalSetup` answers `{ok, started}` at once, and
-    the window treats that answer as completion. Progress frames carry
-    `{stage, message, percent}`, and the window looks for `done` and `error` keys
-    that the core never sends, so every frame sets the state back to running.
-    There is no frontend test for this flow.
-    `shell/src/hooks/useModelSelection.ts` (`handleStartLocalSetup`) ·
-    `shell/src/App.tsx` (the `model.localSetupProgress` subscriber) ·
-    `agent_core/main.py` (local setup)
+20. ~~**"Run a model on this computer" never finishes on screen.**~~ **RE-RUN GREEN
+    2026-09-30.** Fixed and re-run on branch `claude/fix-local-setup-and-preview`.
+    The entry's own check was re-run in jsdom with the frames the core really sends.
+    `tests/ipc_fixtures.py` drives the core's `_run_local_setup` once to the end and
+    once into a failed check. With the real App on Settings, pressing Set up on
+    "Light and quick" left the row at "setting up…" with every Set up button
+    disabled, and the 45% frame showed "Downloading the model — 45%" and a progress
+    bar at 45 percent. After the "done" frame the row read "ready ✓" with the "Ready
+    to use" note, the model list was read again, and "Where Addison thinks" named
+    `llama3.2:3b`. After the "error" frame the row showed "The local model had a
+    problem. Please try again in a moment.", and every Set up button and Try again
+    were usable.
+
+    The re-run found a second cause of the missing picker entry. `normalizeRoles`
+    dropped the `localModels` list that `model.availableRoles` sends beside the
+    roles, so a finished setup never reached the picker while the app was running.
+    That is fixed here. The model is still forgotten when the app restarts, because
+    the core registers it only at the end of the setup. That is entry 93, and it is
+    not fixed here.
+
+    The review of the first fix found two more ways for the row to lose track of a
+    setup. Both are fixed and were re-run the same way. Every frame now names its
+    model (`modelName`). In the reviewer's case, Light and quick's start call timed
+    out behind a turn, Balanced was refused as busy, and Light and quick's frames
+    then marked Balanced ready. The same steps now mark Light and quick ready and
+    leave Balanced alone, and the start call now waits as long as a turn does. An
+    engine restart during a download now ends the row with "Setting up stopped
+    because Addison's engine stopped. Press Set up to try again." and frees the Set
+    up buttons. The desktop app was not launched and no real Ollama was used, so
+    nothing was seen in the real webview.
+    `shell/src/hooks/useModelSelection.ts` (`handleStartLocalSetup`,
+    `foldLocalSetupProgress`, `handleCoreState`, `normalizeRoles`) ·
+    `shell/src/App.tsx` (the `model.localSetupProgress` and core-state subscribers)
+    · `agent_core/main.py` (`_emit_local_progress`)
 
 21. **The delete preview never reaches the permission card.** The core computes
     "About to delete 1,240 files in 12 folders." and puts it on the card as

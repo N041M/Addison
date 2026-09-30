@@ -35,7 +35,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Method, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
-import type { DisplayMessage, LocalSetupState, ProfileState, View } from "./types/ui";
+import type { DisplayMessage, ProfileState, View } from "./types/ui";
 import {
   ipc,
   isEngineConnected,
@@ -45,7 +45,6 @@ import {
   subscribeCoreState,
   subscribeDiagnostics,
   type StreamChunkParams,
-  type LocalSetupProgressParams,
   type DiagnosticEntry,
 } from "./ipc/client";
 import { AddisonMark } from "./components/AddisonMark";
@@ -535,28 +534,11 @@ export function App() {
     );
 
     unsubs.push(
-      subscribe(Method.ModelLocalSetupProgress, (p) => {
-        const params = p as LocalSetupProgressParams;
-        // Progress belongs INSIDE the Settings section, not in a fleeting
-        // banner. Only one setup runs at a time, so we fold each update onto the
-        // in-progress entry (App set its modelId when it kicked things off).
-        models.setLocalSetup((prev) => {
-          if (!prev) return prev; // no setup running — ignore stray progress
-          const status: LocalSetupState["status"] = params.error
-            ? "error"
-            : params.done
-              ? "done"
-              : "running";
-          return {
-            ...prev,
-            status,
-            stage: params.stage ?? params.label ?? prev.stage,
-            percent: typeof params.percent === "number" ? params.percent : prev.percent,
-            message: params.message ?? params.label ?? prev.message,
-            error: params.error ?? prev.error,
-          };
-        });
-      }),
+      // Progress shows inside the Settings section rather than in a banner. The
+      // hook folds each frame onto the setup in progress, and the frame's `stage`
+      // is what ends it. Until 2026-09-30 this subscriber looked for `done` and
+      // `error` keys that the core never sends (KNOWN-BUGS 20).
+      subscribe(Method.ModelLocalSetupProgress, (p) => models.handleLocalSetupProgress(p)),
     );
 
     unsubs.push(subscribeStatus((text) => setStatusBanner(text)));
@@ -565,8 +547,13 @@ export function App() {
     // one-time respawn after a crash). Re-fetch what we cached from the old
     // one — offering a dead engine's model catalog produces "That model
     // option isn't available." (2026-07 manual pass finding).
+    //
+    // Any other state means the engine stopped. A local model setup running inside
+    // it has died without a final frame, and the hook ends it as an error so the
+    // Set up buttons work again.
     unsubs.push(
       subscribeCoreState((state) => {
+        models.handleCoreState(state);
         if (state === "ready") {
           models.refreshRoles();
           models.refreshProviders();

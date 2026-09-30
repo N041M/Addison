@@ -157,30 +157,51 @@ export function useModelSelection() {
   }
 
   // --- Local model setup (§4.1.2): explicit, opt-in, one at a time -----------
+  //
+  // The core answers the start call as soon as the download has started. Each
+  // step after that, and the end of the setup, arrives as a
+  // `model.localSetupProgress` frame, handled below. The window used to treat the
+  // answer as the end. It showed the model as ready the moment the download
+  // began, and then showed "setting up…" for ever (KNOWN-BUGS 20).
   function handleStartLocalSetup(modelId: string) {
     if (!isEngineConnected()) return;
-    setLocalSetup({ modelId, status: "running", stage: "Getting ready", message: "Getting ready…" });
-    ipc
-      .startLocalSetup(modelId)
-      .then(() => {
-        setLocalSetup((prev) =>
-          prev && prev.modelId === modelId
-            ? { ...prev, status: "done", percent: 100, message: undefined, error: undefined }
-            : prev,
-        );
-        // The new model now exists under the local role — refresh so it appears
-        // in the chat's model selector.
-        refreshRoles();
-      })
-      .catch((err) => {
-        const message =
-          err instanceof Error ? err.message : "Setting up the local model didn't work.";
-        setLocalSetup((prev) =>
-          prev && prev.modelId === modelId
-            ? { ...prev, status: "error", error: message }
-            : { modelId, status: "error", error: message },
-        );
-      });
+    setLocalSetup({ modelId, status: "running", message: "Getting ready…" });
+    // A rejection is usually the core refusing before anything started, such as
+    // Ollama not running or too little room on this computer. It can also be the
+    // call giving up while the core still goes on to start the download, and in
+    // that case frames for this model follow and take the row back. So the
+    // refusal only lands on the setup this call started, while it is still
+    // waiting. A setup that frames have since taken over or ended is left alone.
+    ipc.startLocalSetup(modelId).catch((err) => {
+      const message =
+        err instanceof Error ? err.message : "Setting up the local model didn't work.";
+      setLocalSetup((prev) =>
+        prev && prev.modelId === modelId && prev.status === "running"
+          ? { modelId, status: "error", error: message }
+          : prev,
+      );
+    });
+  }
+
+  // One `model.localSetupProgress` frame, from App's subscriber. A "done" frame
+  // also re-reads the model list, because the core has just registered the new
+  // model and the picker should offer it without a restart.
+  function handleLocalSetupProgress(frame: unknown) {
+    setLocalSetup((prev) => foldLocalSetupProgress(prev, frame));
+    if (asRecord(frame)?.stage === "done") refreshRoles();
+  }
+
+  // The engine's state, from App's core-state subscriber. A setup runs on a
+  // thread inside the engine, so when the engine stops or restarts the setup
+  // dies with it and no final frame is ever sent. A setup still running here
+  // would keep every Set up button disabled for good, so it ends as an error.
+  function handleCoreState(state: string) {
+    if (state === "ready") return;
+    setLocalSetup((prev) =>
+      prev && prev.status === "running"
+        ? { modelId: prev.modelId, status: "error", error: LOCAL_SETUP_INTERRUPTED }
+        : prev,
+    );
   }
 
   function handleChangeDefaultRole(role: ModelRole) {
@@ -248,6 +269,8 @@ export function useModelSelection() {
     handleChangeDefaultCloudModel,
     handleChangeDefaultRole,
     handleStartLocalSetup,
+    handleLocalSetupProgress,
+    handleCoreState,
     handleConnectProvider,
     handleRemoveProvider,
   };
@@ -333,6 +356,57 @@ function pickEffort(model: CloudModel | undefined, current: string | undefined):
   return levels[Math.floor(levels.length / 2)].id;
 }
 
+/** The row's sentence when the engine stops in the middle of a setup. */
+export const LOCAL_SETUP_INTERRUPTED =
+  "Setting up stopped because Addison's engine stopped. Press Set up to try again.";
+
+/**
+ * The setup's state after one `model.localSetupProgress` frame (the shape is
+ * `LocalSetupProgress` in protocol.ts).
+ *
+ * Every frame names its model in `modelName`, and a frame only ever changes the
+ * setup for that model. A frame for the model on screen updates it. A frame for
+ * another model takes over when nothing is on screen or when the setup on screen
+ * has ended, which is how a window finds a setup again after its start call gave
+ * up or after a reload during the download. A frame for another model is ignored
+ * while the setup on screen is still running. A frame that names no model is
+ * ignored, because there is no row to put it on. Before frames named their model,
+ * the frames of one setup could mark a different row ready.
+ *
+ * The frame's `stage` decides the status. "done" and "error" end the setup, and
+ * any other stage means it is still running. On "error" the frame's `message` is
+ * the sentence the row shows. A running frame without a `percent` removes the bar,
+ * because the bar only shows numbers the core measured.
+ */
+export function foldLocalSetupProgress(
+  prev: LocalSetupState | null,
+  frame: unknown,
+): LocalSetupState | null {
+  const obj = asRecord(frame);
+  if (!obj) return prev;
+  const modelId =
+    typeof obj.modelName === "string" && obj.modelName.trim() !== "" ? obj.modelName : undefined;
+  if (!modelId) return prev;
+  if (prev && prev.modelId !== modelId && prev.status === "running") return prev;
+  const message =
+    typeof obj.message === "string" && obj.message.trim() !== "" ? obj.message : undefined;
+  if (obj.stage === "error") {
+    return { modelId, status: "error", ...(message ? { error: message } : {}) };
+  }
+  if (obj.stage === "done") {
+    return { modelId, status: "done", percent: 100 };
+  }
+  const percent =
+    typeof obj.percent === "number" && Number.isFinite(obj.percent) ? obj.percent : undefined;
+  const shown = message ?? (prev?.modelId === modelId ? prev.message : undefined);
+  return {
+    modelId,
+    status: "running",
+    ...(shown ? { message: shown } : {}),
+    ...(percent !== undefined ? { percent } : {}),
+  };
+}
+
 function roleLabel(role: string): string {
   if (role === "local") return "On this computer";
   if (role === "primary") return "Cloud";
@@ -356,11 +430,27 @@ export function normalizeRoles(result: unknown): RoleOption[] {
       ? (record.roles as unknown[])
       : [];
 
+  // The core sends the role list as bare strings and the local models beside it
+  // as `localModels` (rpc/models.py, `_available_roles`), so they are attached to
+  // the "local" role here. Until 2026-09-30 they were not, and no local model ever
+  // reached the picker, the Tools page or the setup rows (KNOWN-BUGS 20).
+  const siblingLocalModels =
+    record && Array.isArray(record.localModels)
+      ? (record.localModels as unknown[])
+          .map(normalizeModel)
+          .filter((m): m is { id: string; label: string } => m !== null)
+      : undefined;
+
   const out: RoleOption[] = [];
   for (const item of list) {
     if (typeof item === "string") {
       if (item !== "primary" && item !== "local") continue;
-      out.push({ role: item, label: roleLabel(item), configured: true });
+      out.push({
+        role: item,
+        label: roleLabel(item),
+        configured: true,
+        ...(item === "local" && siblingLocalModels ? { models: siblingLocalModels } : {}),
+      });
       continue;
     }
     const obj = asRecord(item);
