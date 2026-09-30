@@ -1,17 +1,18 @@
 // "Run a model on this computer" — the local-model setup flow (spec §4.1.2,
 // design-doc §7.3.2), in the dark direction's row idiom: one hairline row per
 // curated choice, the honest "X GB download · needs Y GB memory" line as the
-// row's mono value, and an accent "set up" as its action. Distinct, explicit,
-// opt-in: NOT enabled by default and never shown during onboarding.
+// row's mono value, and an accent "set up" as its action. The person has to ask
+// for it. It is off by default and never shown during onboarding.
 //
-// The user picks one of a small curated list; that hands the Ollama model tag to
-// the core via `ipc.startLocalSetup(modelName)`. Live progress streams back on
-// `model.localSetupProgress` and renders inline on the row — the stage line as a
-// mono value, and a 2px `track` bar with an `ink` fill. Real numbers only: the
-// bar appears when the core reports a percentage and not before, because a
-// progress bar that is animating on its own is a lie about how far along a
-// download is. On success the roles refresh and the model shows up in the chat's
-// model selector.
+// The person picks one of a small curated list, which hands the Ollama model tag
+// to the core via `ipc.startLocalSetup(modelName)`. Progress arrives on
+// `model.localSetupProgress` and shows on the row. The core's line is the row's
+// mono value, and a 2px `track` bar with an `ink` fill appears only while the
+// core reports a percentage, because a bar that moves on its own would claim
+// progress nobody measured. The setup ends on the core's "done" or "error" frame.
+// After "done" the model list is read again and the model appears in the chat's
+// model selector. After "error" the core's sentence shows under the row and every
+// Set up button works again.
 
 import { useState } from "react";
 import type { LocalSetupState, RoleOption } from "../types/ui";
@@ -113,7 +114,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
               done
                 ? "ready ✓"
                 : running
-                  ? (setup?.message ?? setup?.stage ?? "getting ready…")
+                  ? (setup?.message ?? "getting ready…")
                   : choice.metaLabel
             }
             action={done ? undefined : running ? "setting up…" : "set up"}
@@ -139,8 +140,11 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
               </div>
             )}
 
-            {/* Just-finished confirmation (installed rows already read as done). */}
-            {isThis && setup?.status === "done" && !isInstalled && (
+            {/* Just-finished confirmation. It keys on this session's setup alone,
+                so a model installed on an earlier day shows no note. It used to
+                be hidden for installed rows too, which would hide it the moment
+                the re-read list names the new model. */}
+            {isThis && setup?.status === "done" && (
               <p className="m-0 mt-2 text-[12px] leading-[1.55] text-ink-soft">
                 Ready to use. Pick &ldquo;On this computer&rdquo; beside the message box to use
                 it.

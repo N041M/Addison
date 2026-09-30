@@ -196,20 +196,20 @@ export interface CloudModel {
 }
 
 /**
- * Live state of the "Run a model on this computer" flow (spec §4.1.2), held in
- * App and rendered inside the Settings section. Only one setup runs at a time;
- * `modelId` is the curated model the user chose. Progress lines arrive on
- * `model.localSetupProgress`; the terminal state comes from the
- * `startLocalSetup` promise (done) or a plain-language error (error).
+ * Live state of the "Run a model on this computer" flow (spec §4.1.2), held by
+ * `useModelSelection` and rendered inside the Settings section. Only one setup
+ * runs at a time, and `modelId` is the model the setup is for. Most changes come
+ * from `model.localSetupProgress` frames (`foldLocalSetupProgress`), which name
+ * their model. A refusal before the download starts arrives as the rejected
+ * `startLocalSetup` call instead. An engine that stops during a download ends a
+ * running setup as an error (`handleCoreState`), because no final frame will come.
  */
 export interface LocalSetupState {
   modelId: string;
   status: "running" | "done" | "error";
-  /** Plain-language stage label, e.g. "Checking your computer", "Downloading". */
-  stage?: string;
   /** 0–100 when the core reports it; omitted for stages with no measurable progress. */
   percent?: number;
-  /** A plain-language line from the core to show under the stage. */
+  /** The core's plain-language line about what is happening now. */
   message?: string;
   /** Plain-language failure, shown inline. */
   error?: string;

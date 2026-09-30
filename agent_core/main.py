@@ -2509,32 +2509,43 @@ class JsonRpcServer(
     def _run_local_setup(self, model_name: str) -> None:
         """Background worker: pull (step 3) → verify (step 4) → register. Every
         outcome is a ``model.localSetupProgress`` notification; nothing raises out
-        of the thread."""
+        of the thread.
+
+        Every frame names the model it is about. The window uses the name to put a
+        frame on the right row, and to pick a setup back up when it has lost track
+        of it, for example after its start request timed out or the window was
+        reloaded during the download (KNOWN-BUGS 20)."""
+
+        def emit(stage: str, message: str, percent: int | None) -> None:
+            self._emit_local_progress(model_name, stage, message, percent)
+
         try:
-            self._emit_local_progress("downloading", "Getting the download started...", None)
+            emit("downloading", "Getting the download started...", None)
             for update in pull_model(model_name, self._ollama_base_url, self._ollama_client):
                 percent, message = _pull_progress(update)
                 if message is not None:
-                    self._emit_local_progress("downloading", message, percent)
+                    emit("downloading", message, percent)
 
-            self._emit_local_progress("verifying", "Checking the model works...", None)
+            emit("verifying", "Checking the model works...", None)
             provider = OllamaProvider(model_name, self._ollama_base_url, self._ollama_client)
             provider.send([Message(role="user", content="Hello")], [])
 
             # Verified: register it so ModelRole.LOCAL and the Local picker appear.
             self.model_router.register_local_model(model_name, provider)
-            self._emit_local_progress("done", f"{model_name} is ready to use.", 100)
+            emit("done", f"{model_name} is ready to use.", 100)
         except RuntimeError as exc:
             # Provider/pull errors already carry a plain, user-ready sentence.
-            self._emit_local_progress("error", str(exc), None)
+            emit("error", str(exc), None)
         except Exception:
-            self._emit_local_progress("error", _GENERIC_TURN_ERROR, None)
+            emit("error", _GENERIC_TURN_ERROR, None)
         finally:
             with self._local_setup_lock:
                 self._local_setup_active = False
 
-    def _emit_local_progress(self, stage: str, message: str, percent: int | None) -> None:
-        payload: dict = {"stage": stage, "message": message}
+    def _emit_local_progress(
+        self, model_name: str, stage: str, message: str, percent: int | None
+    ) -> None:
+        payload: dict = {"modelName": model_name, "stage": stage, "message": message}
         if percent is not None:
             payload["percent"] = percent
         self._notify(Method.MODEL_LOCAL_SETUP_PROGRESS, payload)

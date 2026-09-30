@@ -1,0 +1,30 @@
+[
+  {
+    "modelName": "llama3.2:3b",
+    "stage": "downloading",
+    "message": "Getting the download started..."
+  },
+  {
+    "modelName": "llama3.2:3b",
+    "stage": "downloading",
+    "message": "Downloading the model \u2014 45%",
+    "percent": 45
+  },
+  {
+    "modelName": "llama3.2:3b",
+    "stage": "downloading",
+    "message": "Downloading the model \u2014 100%",
+    "percent": 100
+  },
+  {
+    "modelName": "llama3.2:3b",
+    "stage": "verifying",
+    "message": "Checking the model works..."
+  },
+  {
+    "modelName": "llama3.2:3b",
+    "stage": "done",
+    "message": "llama3.2:3b is ready to use.",
+    "percent": 100
+  }
+]

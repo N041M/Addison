@@ -478,7 +478,23 @@ class Method:
     CHANNEL_REQUEST_QUEUED = "channel.requestQueued"
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
+    # {modelName} -> {ok: true, started: true}. The core sends this answer as soon
+    # as the download has started. The end of the setup is reported by
+    # ``model.localSetupProgress``. The checks that come first (is Ollama running,
+    # is there room on this computer) refuse with an ordinary JSON-RPC error
+    # carrying a plain sentence, and then nothing starts. The call runs on the
+    # worker, so it waits behind a turn in progress.
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"
+    # {modelName, stage, message, percent?}, emitted by the setup thread (main.py,
+    # ``_run_local_setup``). ``modelName`` is the Ollama tag being set up, on every
+    # frame. ``stage`` is "downloading" or "verifying" while the setup runs. Every
+    # setup that started ends with exactly one "done" or "error" frame, and no
+    # frame follows it. "done" means the model is registered and
+    # ``model.availableRoles`` lists it under ``localModels``. On "error",
+    # ``message`` is the plain sentence to show. ``percent`` (0 to 100) is present
+    # only on frames that measured something. The window treated the answer above
+    # as the end of the setup until 2026-09-30 (KNOWN-BUGS 20).
+    # tests/ipc_fixtures.py captures one finished and one failed setup.
     MODEL_LOCAL_SETUP_PROGRESS = "model.localSetupProgress"
     # Multi-provider API keys (owner decision 2026-07-18). Keys themselves NEVER
     # cross this boundary — the webview stores them straight into the OS keychain via

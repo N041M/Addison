@@ -92,7 +92,13 @@ export const Method = {
   ProfileSet: "profile.set",
   ModelAvailableRoles: "model.availableRoles",
   ModelSetRoleForNextMessage: "model.setRoleForNextMessage",
+  // {modelName} -> {ok: true, started: true}. The core sends this answer as soon
+  // as the download has started. The end of the setup is reported by
+  // `model.localSetupProgress`. A refusal before the start (Ollama not running,
+  // too little room) is a rejected call with a plain sentence. The call waits
+  // behind a turn in progress. Mirrored in protocol.py.
   ModelStartLocalSetup: "model.startLocalSetup",
+  // Carries a `LocalSetupProgress` (below).
   ModelLocalSetupProgress: "model.localSetupProgress",
   // Multi-provider API keys (owner decision 2026-07-18). These carry only
   // non-secret status/metadata — the key itself goes to the OS keychain via the
@@ -445,6 +451,23 @@ export interface JsonRpcResponse {
   id: string | number | null;
   result?: unknown;
   error?: { code: number; message: string };
+}
+
+/**
+ * One `model.localSetupProgress` frame (protocol.py documents the method).
+ * `modelName` is the Ollama tag being set up, on every frame. `stage` is
+ * "downloading" or "verifying" while the setup runs. Every setup that started ends
+ * with exactly one "done" or "error" frame. On "error", `message` is the plain
+ * sentence to show. `percent` (0 to 100) is present only on frames that measured
+ * something.
+ */
+export type LocalSetupStage = "downloading" | "verifying" | "done" | "error";
+
+export interface LocalSetupProgress {
+  modelName: string;
+  stage: LocalSetupStage;
+  message: string;
+  percent?: number;
 }
 
 export interface ChatMessage {

@@ -104,15 +104,6 @@ export interface StreamChunkParams {
   done?: boolean;
 }
 
-export interface LocalSetupProgressParams {
-  stage?: string;
-  label?: string;
-  message?: string;
-  percent?: number;
-  done?: boolean;
-  error?: string;
-}
-
 // A frame arriving on the `core-message` channel is either a response (has an
 // `id`) or a notification (has a `method`, no `id`).
 interface CoreFrame {
@@ -499,13 +490,18 @@ export const ipc = {
     call(Method.ProviderConnect, { provider, baseUrl }).then(parseConnectResult),
   disconnectProvider: (provider: string) =>
     call(Method.ProviderDisconnect, { provider }),
-  // Kicks off the one-time local-model download/verify for `modelName` (the
-  // curated Ollama tag). Resolves when the model is set up and has appeared in
-  // `availableRoles`; rejects with a plain-language error (e.g. Ollama not
-  // running, machine too small). Live progress arrives on
-  // `model.localSetupProgress` in between.
+  // Starts the one-time local-model download and check for `modelName` (the
+  // curated Ollama tag). Resolves as soon as the download has started. Rejects
+  // with a plain sentence when the core refuses before starting, for example when
+  // Ollama is not running or the computer is too small. Progress and the end of
+  // the setup arrive on `model.localSetupProgress` (useModelSelection's
+  // `handleLocalSetupProgress`).
+  //
+  // TURN_TIMEOUT_MS, not the default. The core runs this call on its worker, so
+  // it waits behind a turn in progress. With the 120 s default a long turn made
+  // the call time out while the core went on to start the download.
   startLocalSetup: (modelName?: string) =>
-    call(Method.ModelStartLocalSetup, { modelName }),
+    call(Method.ModelStartLocalSetup, { modelName }, TURN_TIMEOUT_MS),
 
   // Conversation history (backend already merged on the parent branch).
   // `list` returns summaries newest-first; `new` mints a fresh conversation and

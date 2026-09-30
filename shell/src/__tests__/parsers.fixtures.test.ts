@@ -132,10 +132,18 @@ describe("normalizeProfile over the real profile.get payload", () => {
 });
 
 describe("normalizeRoles / normalizeCloudModels over the real availableRoles payload", () => {
-  it("surfaces primary + local with plain labels", () => {
+  it("surfaces primary + local with plain labels, and the local models under local", () => {
+    // The core sends the local models beside the role list, as `localModels`. This
+    // expectation used to leave them off, which pinned the defect it should have
+    // caught: no local model ever reached the picker (KNOWN-BUGS 20).
     expect(normalizeRoles(rolesFixture)).toEqual([
       { role: "primary", label: "Cloud", configured: true },
-      { role: "local", label: "On this computer", configured: true },
+      {
+        role: "local",
+        label: "On this computer",
+        configured: true,
+        models: [{ id: "llama3.2:3b", label: "llama3.2:3b" }],
+      },
     ]);
   });
 
