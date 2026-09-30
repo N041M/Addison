@@ -489,6 +489,21 @@ others are struck.
     16 KB, and Google and Ollama set no cap.
     `shell/src/lib/streamMarkdown.ts` · `shell/src/components/StreamingMarkdown.tsx`
 
+91. **When a turn fails after a tool has run, the transcript hides the action.**
+    When `run_turn` raises, the `except` in `rpc/conversation.py` removes
+    everything the turn added (`del self.conversation.messages[pre_turn:]`),
+    including a tool call that already ran and its result. The file is on disk and
+    the chat shows only the person's message and an error. Live repro, found while
+    fixing 17: the fake model asks for `save_file`, the card is answered Allow, and
+    the model then hangs until the fallback budget ends the turn. The file is
+    written and the stored transcript holds only the user message. Any failure
+    after a tool round does the same, such as a provider outage or a rejected
+    request on the second send. The removal exists because an unpaired tool call
+    makes the provider refuse every later request, so a fix has to keep the pair
+    intact and still leave the conversation sendable. Added 2026-09-30, after the
+    hunt.
+    `agent_core/rpc/conversation.py` · `agent_core/orchestrator.py`
+
 ### P3 — quality
 
 62. **Every automatically approved step shows twice in "Addison's work" in
