@@ -5,9 +5,9 @@ entry names a repro and the code area. Strike an entry only after its own check
 has been re-run against a build that contains the fix, and write what the re-run
 showed. Design questions go in [`docs/KNOWN-GAPS.md`](docs/KNOWN-GAPS.md).
 
-Two passes feed this file. The bug hunt of 2026-09-29 is first because every
-entry in it is open. The whole-app test pass of 8–9 August follows it, and all of
-its entries are struck.
+Two passes feed this file. The bug hunt of 2026-09-29 comes first because it is
+the newer pass and most of its entries are still open. The whole-app test pass of
+8–9 August follows it, and all of its entries are struck.
 
 ## Bug hunt, 2026-09-29
 
@@ -114,7 +114,9 @@ others are struck.
     is the only path from the wire to `PermissionCard`, which would render the
     line. Rendering the real App with the core's card shows the description and
     no preview. The BUILD-LOG and KNOWN-GAPS entries that describe the line as
-    shipped are false about the app.
+    shipped are false about the app. PR #156 (`claude/permission-card-command`)
+    already copies `preview` in `normalizePermission`. Strike this entry after
+    that PR merges and the check above has been re-run.
     `shell/src/App.tsx` (`normalizePermission`)
 
 ### P2 — trust and lifecycle
@@ -402,7 +404,10 @@ others are struck.
     a custom server connected first and OpenAI second, the picker says "Your own
     server" for `gpt-4o` and the turn goes to `api.openai.com` under the OpenAI
     key. Disconnecting the named provider leaves the traffic where it was. The
-    same collapse happens between a custom Ollama and a local model name.
+    same collapse happens between a custom Ollama and a local model name. Once
+    local models reach the Settings lists (the fix for 20), a custom server at
+    the Ollama address lists the same ids as the local role, and the custom
+    chain builder shows the model twice under one React key.
     `agent_core/providers/router.py` · `agent_core/models_catalog.py` ·
     `agent_core/rpc/providers.py`
 
@@ -503,6 +508,17 @@ others are struck.
     intact and still leave the conversation sendable. Added 2026-09-30, after the
     hunt.
     `agent_core/rpc/conversation.py` · `agent_core/orchestrator.py`
+
+93. **A model set up on this computer is forgotten when the app restarts.** The
+    only place that registers a local model with the router is the end of
+    `_run_local_setup`, which runs in the process that did the download. The
+    router built at startup registers none. After a restart the core's
+    `localModels` list is empty, the picker no longer offers the model, and the
+    Settings row offers to set it up again although it is still installed in
+    Ollama. Found by the review of the fix for 20. Added 2026-09-30, after the
+    hunt.
+    `agent_core/main.py` (`_run_local_setup`, router construction) ·
+    `agent_core/providers/router.py`
 
 ### P3 — quality
 
