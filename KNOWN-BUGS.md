@@ -146,6 +146,19 @@ others are struck.
     newest working setup, which can be the broken one. Reproduced by the review of
     the fix for 16 with the real `Store` and the call a message makes. Added
     2026-09-30, after the hunt.
+    **Half fixed on branch `claude/fix-restore-old-snapshots`, 2026-09-30.** When
+    the row exists, recording presence now writes `secret_presence` and nothing
+    else, and recording or clearing a rejected key writes `key_rejected_at` and
+    nothing else. The review's repro passes on the branch, and a new test drives the
+    server through a restore, the key read and proof a message makes, and a second
+    press that now goes further back. The missing-row half is still open and waits
+    for an owner decision. A fresh install's first restore point never has an
+    Anthropic row, because the first message creates it. So a broken change, one
+    message, a press that lands on the first restore point, another message and a
+    second press restore the broken setup. Not creating the row would leave Settings
+    showing Anthropic as not connected, and the live model list not loaded, while
+    turns still use the key. The secrets plan §4.1 calls a restored setup that
+    claims fewer connections than exist the worse lie.
     `agent_core/memory/store.py` (`record_secret_presence`) ·
     `agent_core/snapshots/snapshot_manager.py`
 

@@ -12,6 +12,23 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 09-30 (second): a key read no longer moves the restore walk, when the row exists
+
+KNOWN-BUGS 94. Recording what a key read proved (`record_secret_presence`) and
+recording or clearing a rejected key used to write the captured
+`provider_config.updated_at` beside the excluded column they exist for. A restore
+resets `secret_presence`, so the first message after every restore changed the
+captured setup, and the next press restored the newest working setup. Those three
+writes now touch only their own column. Nothing reads `provider_config.updated_at`.
+Creating a missing row to record presence is still captured state, and it is still
+open because the row decides what Settings shows. The entry states the choice.
+A search for other writes to captured tables that are not a configuration change
+found two more. `record_key_rejected` still creates a row when a provider with no
+row rejects a key. Every routine run writes the captured `run_count` and
+`last_run_at`, so running a routine after a restore also ends the walk.
+
+---
+
 ## What shipped 09-30: restore points from before an update can be restored again
 
 This fixes KNOWN-BUGS 16, and [`SAFETY.md`](SAFETY.md) ("What is captured") owns the

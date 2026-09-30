@@ -890,7 +890,20 @@ class Store:
 
         An EXISTING row keeps its ``connected`` untouched: a real ``provider.connect``
         result outranks a presence read, which knows only that bytes are saved and
-        nothing at all about whether the provider accepts them."""
+        nothing at all about whether the provider accepts them.
+
+        For an existing row this writes ``secret_presence`` and nothing else, and in
+        particular not ``updated_at`` (KNOWN-BUGS 94). ``secret_presence`` is excluded
+        from snapshot capture and ``updated_at`` is captured. A restore resets the
+        presence to 'unknown', so the first message after every restore recorded it
+        again, and writing ``updated_at`` with it changed the captured setup. The
+        restore walk then no longer recognised the restore point it had landed on,
+        and the next press restored the newest working setup, which can be the broken
+        one. Nothing reads ``provider_config.updated_at``.
+
+        A MISSING row is still created, and that write is captured state. It is left
+        as it is because the row decides what Settings shows and whether the live
+        model list loads, so changing it is a product decision (KNOWN-BUGS 94)."""
         value = SecretPresence(presence).value
         row = self._conn.execute(
             "SELECT secret_presence FROM provider_config WHERE provider_id = ?",
@@ -900,9 +913,8 @@ class Store:
             if row["secret_presence"] == value:
                 return   # idempotent: nothing learned, nothing written
             self._conn.execute(
-                "UPDATE provider_config SET secret_presence = ?, updated_at = ? "
-                "WHERE provider_id = ?",
-                (value, int(time.time()), provider_id),
+                "UPDATE provider_config SET secret_presence = ? WHERE provider_id = ?",
+                (value, provider_id),
             )
         else:
             self._conn.execute(
@@ -941,10 +953,12 @@ class Store:
         if row is not None and row["key_rejected_at"] is not None:
             return False   # already marked, already told — say nothing again
         if row is not None:
+            # ``key_rejected_at`` only, for the reason ``record_secret_presence`` gives:
+            # it is excluded from capture, and a turn that also wrote the captured
+            # ``updated_at`` would change the setup the restore walk compares against.
             self._conn.execute(
-                "UPDATE provider_config SET key_rejected_at = ?, updated_at = ? "
-                "WHERE provider_id = ?",
-                (now, now, provider_id),
+                "UPDATE provider_config SET key_rejected_at = ? WHERE provider_id = ?",
+                (now, provider_id),
             )
         else:
             self._conn.execute(
@@ -962,9 +976,9 @@ class Store:
         ``upsert_provider_config``: the FAILING branches of connect call that too,
         and a failed connect is no evidence that the revoked key was replaced."""
         self._conn.execute(
-            "UPDATE provider_config SET key_rejected_at = NULL, updated_at = ? "
+            "UPDATE provider_config SET key_rejected_at = NULL "
             "WHERE provider_id = ? AND key_rejected_at IS NOT NULL",
-            (int(time.time()), provider_id),
+            (provider_id,),
         )
         self._conn.commit()
 

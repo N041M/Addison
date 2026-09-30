@@ -15,11 +15,13 @@ UNKNOWN is defending that one sentence, from a different direction.
 from __future__ import annotations
 
 import sqlite3
+import time
 
 import httpx
 import pytest
 
 from agent_core.main import JsonRpcServer
+from agent_core.memory import store as store_module
 from agent_core.memory.store import Store
 from agent_core.providers.base import ModelRole
 from agent_core.providers.router import ModelRouter
@@ -379,3 +381,121 @@ def test_connect_records_unknown_when_the_keychain_would_not_answer(tmp_path):
         assert server.store.secret_presence("openai") is SecretPresence.UNKNOWN
     finally:
         server.store.close()
+
+
+# ===========================================================================
+# KNOWN-BUGS 94: recording what a read proved never moves the restore walk
+# ===========================================================================
+class _AdvancingWallClock:
+    """The store's ``time`` module, with ``time()`` five seconds later on every call.
+    A fast test otherwise writes every timestamp in the same second, and a write that
+    changes a captured timestamp would go unnoticed."""
+
+    def __init__(self) -> None:
+        self._now = 1_800_000_000.0
+
+    def time(self) -> float:
+        self._now += 5
+        return self._now
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+
+def test_recording_what_a_key_read_proved_leaves_the_captured_setup_alone(
+    tmp_path, monkeypatch
+):
+    """``secret_presence`` and ``key_rejected_at`` are observations and are excluded
+    from capture. Writing either one on an existing row must leave every captured
+    column as it was, or the first message after a restore changes the setup the
+    restore walk compares against.
+
+    Mutations: put ``updated_at`` back into the UPDATE in ``record_secret_presence``,
+    ``record_key_rejected`` or ``clear_key_rejected``, and the matching assertion
+    fails."""
+    monkeypatch.setattr(store_module, "time", _AdvancingWallClock())
+    store = Store(tmp_path / "p.sqlite3")
+    try:
+        store.upsert_provider_config("anthropic", connected=True, added_at=1)
+        captured = store.read_config_state()
+
+        store.record_secret_presence("anthropic", SecretPresence.PRESENT)
+        assert store.read_config_state() == captured, "recording presence"
+
+        assert store.record_key_rejected("anthropic") is True
+        assert store.read_config_state() == captured, "recording a rejected key"
+
+        store.clear_key_rejected("anthropic")
+        assert store.read_config_state() == captured, "clearing a rejected key"
+    finally:
+        store.close()
+
+
+def test_a_message_after_a_restore_does_not_send_the_next_press_forward(
+    tmp_path, monkeypatch
+):
+    """The entry's repro through the server. The person connects a key, adds a note,
+    breaks something, and presses the one-action restore. They send one message on
+    the restored setup and press again. The second press has to go further back.
+
+    A restore resets ``secret_presence`` to 'unknown', so the message's key read
+    records it again. That write used to set the captured ``updated_at`` too. The
+    walk then no longer recognised where it had landed, and the second press
+    restored the broken setup.
+
+    Mutation: put ``updated_at`` back into the UPDATE in ``record_secret_presence``
+    and the second press restores the broken setup."""
+    monkeypatch.setattr(store_module, "time", _AdvancingWallClock())
+
+    def _down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    server = JsonRpcServer(
+        reader=None,
+        writer=None,
+        tool_registry=ToolRegistry(),
+        store_factory=lambda: Store(tmp_path / "presence.sqlite3"),
+        db_path=tmp_path / "presence.sqlite3",
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: _ScriptedProvider([])}),
+        cloud_catalog=[],
+        ollama_base_url="http://127.0.0.1:11434",
+        ollama_client=httpx.Client(transport=httpx.MockTransport(_down)),
+        primary_key_probe=lambda: True,
+    )
+    server._ensure_built()
+    store = server.store
+
+    def a_message() -> None:
+        """The two things a message to the main cloud model does to the store: the
+        key read at its start, and the proof of a working setup at its end."""
+        assert server._primary_key_status() is SecretPresence.PRESENT
+        server._mark_verified_working()
+
+    def notes() -> list[str]:
+        return [skill["name"] for skill in store.list_skills()]
+
+    try:
+        store.upsert_provider_config(
+            "anthropic", connected=True, added_at=1, secret_presence=SecretPresence.PRESENT
+        )
+        a_message()
+        store.insert_skill(id="s-a", name="A", instructions="Be brief.", enabled=True,
+                           created_at=1)
+        a_message()
+        store.insert_skill(id="s-broken", name="Broken", instructions="Use the priciest.",
+                           enabled=True, created_at=2)
+        a_message()
+
+        first = server._snapshot_restore_last_working()
+        assert first["ok"], first
+        assert notes() == ["A"]
+        assert store.secret_presence("anthropic") is SecretPresence.UNKNOWN
+
+        a_message()
+        second = server._snapshot_restore_last_working()
+
+        assert "Broken" not in notes()
+        assert second["ok"], second
+        assert notes() == []
+    finally:
+        store.close()
